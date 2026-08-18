@@ -1,0 +1,20 @@
+{% if page.jobs %}
+  <div class="sub">
+    Showing {{ page.jobs|length }} of {{ page.total }} canonical jobs
+    &middot; page {{ page.page }} of {{ page.pages }}
+  </div>
+  {% for job in page.jobs %}{% include "partials/job_card.html" %}{% endfor %}
+  <div class="actions" style="justify-content:center;margin-top:16px">
+    {% if page.has_prev %}
+      <a class="btn" href="/?{{ filters.to_query_string(page=page.page-1) }}">← Previous</a>
+    {% endif %}
+    {% if page.has_next %}
+      <a class="btn" href="/?{{ filters.to_query_string(page=page.page+1) }}">Next →</a>
+    {% endif %}
+  </div>
+{% else %}
+  <div class="empty">
+    <p><strong>No jobs match these filters.</strong></p>
+    <p>Run a search, or loosen the filters.</p>
+  </div>
+{% endif %}

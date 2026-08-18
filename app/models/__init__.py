@@ -1,0 +1,66 @@
+"""SQLAlchemy models. Importing this package registers every table on ``Base``."""
+
+from app.models.base import (
+    KANBAN_ORDER,
+    SOURCE_KIND_RANK,
+    TERMINAL_STATUSES,
+    Base,
+    EmploymentType,
+    Freshness,
+    JobStatus,
+    NotificationKind,
+    Priority,
+    RemoteStatus,
+    RunStatus,
+    SourceHealth,
+    SourceKind,
+    SponsorshipStatus,
+    utcnow,
+)
+from app.models.company import AtsBoard, Company
+from app.models.job import DedupDecision, Job, JobEvent, JobListing
+from app.models.tracking import (
+    Application,
+    ApplicationNote,
+    JobSourceRecord,
+    Notification,
+    NotificationItem,
+    SearchRun,
+    SearchRunSource,
+)
+from app.models.user import CandidateProfile, Resume, User, UserPreference
+
+__all__ = [
+    "KANBAN_ORDER",
+    "SOURCE_KIND_RANK",
+    "TERMINAL_STATUSES",
+    "Application",
+    "ApplicationNote",
+    "AtsBoard",
+    "Base",
+    "CandidateProfile",
+    "Company",
+    "DedupDecision",
+    "EmploymentType",
+    "Freshness",
+    "Job",
+    "JobEvent",
+    "JobListing",
+    "JobSourceRecord",
+    "JobStatus",
+    "Notification",
+    "NotificationItem",
+    "NotificationKind",
+    "Priority",
+    "RemoteStatus",
+    "Resume",
+    "RunStatus",
+    "SearchRun",
+    "SearchRunSource",
+    "SourceHealth",
+    "SourceKind",
+    "SponsorshipStatus",
+    "User",
+    "UserPreference",
+    "utcnow",
+]

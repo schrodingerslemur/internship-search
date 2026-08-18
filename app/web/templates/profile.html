@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Candidate profile{% endblock %}
+{% block content %}
+<h1>Candidate profile</h1>
+<div class="sub">Used to score every job. The more accurate this is, the better the ranking.</div>
+
+{% if saved %}<div class="note">Saved.</div>{% endif %}
+
+<form method="post" action="/profile">
+<h2>Education</h2>
+<div class="panel">
+  <div class="row">
+    <div class="field"><label>School</label><input name="school" value="{{ profile.school or '' }}" style="width:100%"></div>
+    <div class="field"><label>Degree</label><input name="degree" value="{{ profile.degree or '' }}" style="width:100%"></div>
+    <div class="field"><label>Major</label><input name="major" value="{{ profile.major or '' }}" style="width:100%"></div>
+    <div class="field"><label>Minor</label><input name="minor" value="{{ profile.minor or '' }}" style="width:100%"></div>
+    <div class="field"><label>Graduation year</label><input name="graduation_year" type="number" value="{{ profile.graduation_year or '' }}"></div>
+    <div class="field"><label>Graduation month</label><input name="graduation_month" type="number" min="1" max="12" value="{{ profile.graduation_month or '' }}"></div>
+    <div class="field"><label>GPA</label><input name="gpa" type="number" step="0.01" value="{{ profile.gpa or '' }}"></div>
+  </div>
+  <div class="field"><label>Coursework (comma separated)</label>
+    <input name="coursework" value="{{ profile.coursework|join(', ') }}" style="width:100%"></div>
+</div>
+
+<h2>Skills</h2>
+<div class="panel">
+  <div class="help" style="margin-bottom:12px">Comma separated. These are matched against every posting.</div>
+  <div class="field"><label>Technical skills</label>
+    <input name="technical_skills" value="{{ profile.technical_skills|join(', ') }}" style="width:100%"></div>
+  <div class="field"><label>Programming languages</label>
+    <input name="programming_languages" value="{{ profile.programming_languages|join(', ') }}" style="width:100%"></div>
+  <div class="field"><label>Hardware skills</label>
+    <input name="hardware_skills" value="{{ profile.hardware_skills|join(', ') }}" style="width:100%"></div>
+  <div class="field"><label>Software skills</label>
+    <input name="software_skills" value="{{ profile.software_skills|join(', ') }}" style="width:100%"></div>
+  <div class="field"><label>Tools</label>
+    <input name="tools" value="{{ profile.tools|join(', ') }}" style="width:100%"></div>
+</div>
+
+<h2>Experience</h2>
+<div class="panel">
+  <div class="field"><label>Previous internships (one per line)</label>
+    <textarea name="previous_internships" rows="4">{{ profile.previous_internships|join('\n') }}</textarea></div>
+  <div class="field"><label>Projects (one per line)</label>
+    <textarea name="projects" rows="5">{{ profile.projects|join('\n') }}</textarea></div>
+  <div class="field"><label>Publications (one per line)</label>
+    <textarea name="publications" rows="3">{{ profile.publications|join('\n') }}</textarea></div>
+  <div class="field"><label>Research experience</label>
+    <textarea name="research_experience" rows="4">{{ profile.research_experience or '' }}</textarea></div>
+  <div class="field"><label>Summary</label>
+    <textarea name="summary" rows="3">{{ profile.summary or '' }}</textarea></div>
+</div>
+
+<h2>Preferences &amp; authorization</h2>
+<div class="panel">
+  <div class="row">
+    <div class="field"><label>Work authorization</label>
+      <input name="work_authorization" value="{{ profile.work_authorization or '' }}" style="width:100%"></div>
+    <div class="field"><label>Security clearance</label>
+      <input name="security_clearance" value="{{ profile.security_clearance or '' }}" style="width:100%"></div>
+    <div class="field"><label>I require sponsorship</label>
+      <input type="checkbox" name="requires_sponsorship" {% if profile.requires_sponsorship %}checked{% endif %}></div>
+    <div class="field"><label>Willing to relocate</label>
+      <input type="checkbox" name="willing_to_relocate" {% if profile.willing_to_relocate %}checked{% endif %}></div>
+  </div>
+  <div class="field"><label>Preferred industries (comma separated)</label>
+    <input name="preferred_industries" value="{{ profile.preferred_industries|join(', ') }}" style="width:100%"></div>
+  <div class="field"><label>Preferred locations (comma separated)</label>
+    <input name="preferred_locations" value="{{ profile.preferred_locations|join(', ') }}" style="width:100%"></div>
+</div>
+
+<div style="margin:20px 0"><button class="btn primary" type="submit">Save profile</button></div>
+</form>
+
+<h2>Resumes</h2>
+<div class="panel">
+  {% if resumes %}
+    <table>
+      <thead><tr><th>Name</th><th>Kind</th><th>File</th><th>Keywords found</th><th>Uploaded</th></tr></thead>
+      <tbody>
+      {% for r in resumes %}
+        <tr>
+          <td>{{ r.name }}{% if r.is_default %} <span class="pill">default</span>{% endif %}</td>
+          <td>{{ r.kind }}</td>
+          <td class="help">{{ r.filename or '—' }}</td>
+          <td class="help">{{ r.keywords|length }}</td>
+          <td class="help">{{ r.uploaded_at|timeago if r.uploaded_at else '—' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="sub">No resumes uploaded. Upload one to get per-job resume recommendations.</p>
+  {% endif %}
+
+  <form method="post" action="/resumes" enctype="multipart/form-data" style="margin-top:14px">
+    <div class="row">
+      <div class="field"><label>Name</label><input name="name" placeholder="Hardware Resume" required style="width:100%"></div>
+      <div class="field"><label>Kind</label>
+        <select name="kind">
+          <option value="hardware">Hardware</option>
+          <option value="software">Software</option>
+          <option value="quant">Quant</option>
+          <option value="general">General</option>
+        </select></div>
+      <div class="field"><label>File (.pdf, .docx, .txt, .md)</label><input type="file" name="file"></div>
+      <div class="field"><label>Make default</label><input type="checkbox" name="make_default"></div>
+    </div>
+    <button class="btn" type="submit">Upload resume</button>
+    <div class="help" style="margin-top:8px">
+      Resumes are stored locally and used only to recommend which version to send.
+      Nothing is rewritten and nothing is submitted for you.
+    </div>
+  </form>
+</div>
+{% endblock %}

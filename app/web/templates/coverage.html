@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Search coverage{% endblock %}
+{% block content %}
+<h1>Search coverage</h1>
+<div class="sub">
+  Measured numbers from actual runs. Sources that did not run are reported as such,
+  never counted as searched.
+</div>
+
+{% if request.query_params.get('started') %}
+  <div class="note">A search was started in the background. Reload in a minute to see results.</div>
+{% endif %}
+
+{% if latest %}
+<h2>Latest run &middot; {{ latest.started_at|timeago }} &middot; {{ latest.status|upper }}</h2>
+<div class="stats">
+  <div class="stat"><div class="n">{{ latest.raw_jobs_found }}</div><div class="l">Raw listings</div></div>
+  <div class="stat"><div class="n">{{ latest.duplicates_removed }}</div><div class="l">Duplicates merged</div></div>
+  <div class="stat"><div class="n">{{ latest.unique_jobs }}</div><div class="l">Unique jobs</div></div>
+  <div class="stat"><div class="n">{{ latest.relevant_jobs }}</div><div class="l">Relevant</div></div>
+  <div class="stat hot"><div class="n">{{ latest.high_priority_jobs }}</div><div class="l">High priority</div></div>
+  <div class="stat"><div class="n">{{ latest.new_jobs }}</div><div class="l">New</div></div>
+</div>
+
+<h2>Per-source results for this run</h2>
+<div class="panel">
+  <table>
+    <thead><tr><th>Source</th><th>Status</th><th>Listings</th><th>Boards</th><th>Time</th><th>Detail</th></tr></thead>
+    <tbody>
+    {% for s in latest.source_stats|sort(attribute='jobs_returned', reverse=true) %}
+      <tr>
+        <td><strong>{{ s.source }}</strong><div class="help">{{ s.kind|humanize }}</div></td>
+        <td>
+          {% if s.status == 'ok' %}<span style="color:var(--ok)">✓ Working</span>
+          {% elif s.status == 'degraded' %}<span style="color:var(--warn)">⚠ Partial</span>
+          {% elif s.status == 'unconfigured' %}<span style="color:var(--dim)">— Not configured</span>
+          {% else %}<span style="color:var(--bad)">✗ Failed</span>{% endif %}
+        </td>
+        <td>{{ s.jobs_returned }}</td>
+        <td>{% if s.sub_targets_attempted %}{{ s.sub_targets_successful }}/{{ s.sub_targets_attempted }}{% else %}—{% endif %}</td>
+        <td>{{ '%.1f'|format(s.duration_seconds) }}s</td>
+        <td class="help">{{ (s.error or '')[:110] }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if latest.errors %}
+  <div class="note bad" style="margin-top:12px">
+    <strong>Errors this run:</strong>
+    <ul class="clean">{% for e in latest.errors[:8] %}<li>{{ e[:200] }}</li>{% endfor %}</ul>
+  </div>
+{% endif %}
+{% else %}
+  <div class="empty"><p>No searches have run yet.</p></div>
+{% endif %}
+
+<h2>Company discovery</h2>
+<div class="stats">
+  <div class="stat"><div class="n">{{ discovery.companies }}</div><div class="l">Companies known</div></div>
+  <div class="stat"><div class="n">{{ discovery.boards }}</div><div class="l">ATS boards registered</div></div>
+  <div class="stat"><div class="n">{{ discovery.active_boards }}</div><div class="l">Active boards</div></div>
+  <div class="stat"><div class="n">{{ discovery.boards_crawled }}</div><div class="l">Boards crawled OK</div></div>
+</div>
+<div class="note">
+  Board identities are harvested from every posting URL the pipeline sees, then crawled
+  directly on later runs. This is how companies you never named enter the search.
+</div>
+
+<h2>Source health &amp; limitations</h2>
+<div class="panel">
+  <table>
+    <thead><tr><th>Source</th><th>Health</th><th>Last success</th><th>Total returned</th><th>Notes</th></tr></thead>
+    <tbody>
+    {% for entry in catalog %}
+      {% set rec = records.get(entry.name) %}
+      <tr>
+        <td><strong>{{ entry.display_name }}</strong>
+          <div class="help">{{ entry.kind|humanize }}{% if entry.is_discovery_source %} · discovery{% endif %}</div></td>
+        <td>
+          {% if not rec %}<span style="color:var(--dim)">Not run yet</span>
+          {% elif rec.health == 'ok' %}<span style="color:var(--ok)">✓ Working</span>
+          {% elif rec.health == 'degraded' %}<span style="color:var(--warn)">⚠ Degraded</span>
+          {% elif rec.health == 'unconfigured' %}<span style="color:var(--dim)">— Needs credentials</span>
+          {% else %}<span style="color:var(--bad)">✗ Failed</span>{% endif %}
+        </td>
+        <td class="help">{{ rec.last_success_at|timeago if rec and rec.last_success_at else '—' }}</td>
+        <td>{{ rec.total_jobs_returned if rec else 0 }}</td>
+        <td class="help">
+          {{ entry.notes }}
+          {% if entry.required_credentials %}
+            <br><span class="mono">requires: {{ entry.required_credentials|join(', ') }}</span>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if yields %}
+<h2>Which sources produce strong matches</h2>
+<div class="panel">
+  <table>
+    <thead><tr><th>Source</th><th>Jobs contributed</th><th>Strong matches</th><th>Share</th></tr></thead>
+    <tbody>
+    {% for y in yields %}
+      <tr>
+        <td>{{ y.source }}</td><td>{{ y.jobs }}</td><td>{{ y.strong_matches }}</td>
+        <td style="min-width:140px">
+          <div class="bar"><i style="width:{{ y.share_of_strong }}%"></i></div>
+          <span class="help">{{ y.share_of_strong }}%</span>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="help" style="margin-top:10px">
+    Used to prioritise crawl order only. Low-yield sources are never disabled &mdash;
+    tomorrow one of them may carry the best posting of the season.
+  </div>
+</div>
+{% endif %}
+
+<h2>Run history</h2>
+<div class="panel">
+  <table>
+    <thead><tr><th>When</th><th>Trigger</th><th>Status</th><th>Raw</th><th>Unique</th><th>Relevant</th><th>New</th><th>Time</th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+      <tr>
+        <td>{{ r.started_at|timeago }}</td>
+        <td class="help">{{ r.trigger }}</td>
+        <td>{{ r.status }}</td>
+        <td>{{ r.raw_jobs_found }}</td>
+        <td>{{ r.unique_jobs }}</td>
+        <td>{{ r.relevant_jobs }}</td>
+        <td>{{ r.new_jobs }}</td>
+        <td>{{ '%.0f'|format(r.duration_seconds or 0) }}s</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

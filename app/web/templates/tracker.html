@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Application tracker{% endblock %}
+{% block content %}
+<h1>Application tracker</h1>
+<div class="sub">Drag-free Kanban: use the buttons on each card to advance a job.</div>
+
+<div class="stats">
+  <div class="stat"><div class="n">{{ counts.saved }}</div><div class="l">Saved</div></div>
+  <div class="stat"><div class="n">{{ counts.applied }}</div><div class="l">In progress</div></div>
+  <div class="stat"><div class="n">{{ counts.interviews }}</div><div class="l">Interviews</div></div>
+  <div class="stat"><div class="n">{{ counts.offers }}</div><div class="l">Offers</div></div>
+</div>
+
+<div class="kanban">
+  {% for col in columns %}
+    <div class="col">
+      <h4>{{ col.value|humanize }} ({{ board[col.value]|length }})</h4>
+      {% for job in board[col.value] %}
+        <div class="card">
+          <div><strong>{{ job.company_name }}</strong></div>
+          <div><a href="/job/{{ job.id }}">{{ job.title[:58] }}</a></div>
+          <div class="help">
+            {{ job.relevance_score|round|int }}/100 · {{ job.location_raw or 'n/a' }}
+          </div>
+          {% set db = deadline_badge(job) %}
+          {% if db.level in ('urgent','soon') %}
+            <div class="help">{{ db.emoji }} {{ db.text }}</div>
+          {% endif %}
+          <div class="actions" style="margin-top:6px">
+            {% set nxt = {'new':'saved','saved':'applied','applied':'assessment',
+                          'assessment':'interview','interview':'offer'} %}
+            {% if nxt.get(col.value) %}
+            <form method="post" action="/job/{{ job.id }}/status" style="margin:0">
+              <input type="hidden" name="status" value="{{ nxt[col.value] }}">
+              <input type="hidden" name="redirect_to" value="/tracker">
+              <button class="btn sm" type="submit">→ {{ nxt[col.value]|humanize }}</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      {% else %}
+        <div class="help">Empty</div>
+      {% endfor %}
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}

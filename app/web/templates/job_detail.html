@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}{{ job.company_name }} — {{ job.title }}{% endblock %}
+{% block content %}
+<a href="/" class="btn sm">← Back to jobs</a>
+<h1 style="margin-top:14px">{{ job.title }}</h1>
+<div class="sub">
+  <strong>{{ job.company_name }}</strong>
+  &middot; 📍 {{ job.location_raw or 'Location not listed' }}
+  &middot; {{ job.remote_status|humanize }}
+  &middot; {{ job.employment_type|humanize }}
+  {% if job.requisition_id %}&middot; <span class="mono">req {{ job.requisition_id }}</span>{% endif %}
+</div>
+
+<div class="split">
+  <div>
+    <div class="panel" style="margin-bottom:16px">
+      <div class="actions">
+        <a class="btn primary" href="{{ job.application_url }}" target="_blank" rel="noopener">Apply →</a>
+        {% for s in statuses %}
+          {% if s.value in ('saved','applied','assessment','interview','offer','rejected','dismissed') and job.status != s.value %}
+          <form method="post" action="/job/{{ job.id }}/status" style="margin:0">
+            <input type="hidden" name="status" value="{{ s.value }}">
+            <input type="hidden" name="redirect_to" value="/job/{{ job.id }}">
+            <button class="btn sm" type="submit">{{ s.value|humanize }}</button>
+          </form>
+          {% endif %}
+        {% endfor %}
+        <span class="pill">Status: {{ job.status|humanize }}</span>
+      </div>
+      <div class="help" style="margin-top:8px">
+        Apply opens the employer's own application page. Nothing is submitted for you.
+      </div>
+    </div>
+
+    {% if job.description %}
+      <h2>Description</h2>
+      <div class="prose">{{ job.description }}</div>
+    {% endif %}
+    {% if job.requirements %}
+      <h2>Requirements</h2>
+      <div class="prose">{{ job.requirements }}</div>
+    {% endif %}
+    {% if job.preferred_qualifications %}
+      <h2>Preferred qualifications</h2>
+      <div class="prose">{{ job.preferred_qualifications }}</div>
+    {% endif %}
+
+    <h2>Application tracking</h2>
+    <div class="panel">
+      <form method="post" action="/job/{{ job.id }}/application">
+        <div class="row">
+          <div class="field"><label>Resume version</label>
+            <input name="resume_version" style="width:100%" value="{{ application.resume_version or '' if application else '' }}"></div>
+          <div class="field"><label>Cover letter version</label>
+            <input name="cover_letter_version" style="width:100%" value="{{ application.cover_letter_version or '' if application else '' }}"></div>
+          <div class="field"><label>Contact name</label>
+            <input name="contact_name" style="width:100%" value="{{ application.contact_name or '' if application else '' }}"></div>
+          <div class="field"><label>Contact email</label>
+            <input name="contact_email" style="width:100%" value="{{ application.contact_email or '' if application else '' }}"></div>
+          <div class="field"><label>Referral</label>
+            <input name="referral" style="width:100%" value="{{ application.referral or '' if application else '' }}"></div>
+          <div class="field"><label>Follow up on</label>
+            <input name="follow_up_at" type="date" style="width:100%"
+              value="{{ application.follow_up_at.strftime('%Y-%m-%d') if application and application.follow_up_at else '' }}"></div>
+        </div>
+        <button class="btn primary" type="submit">Save tracking details</button>
+      </form>
+    </div>
+
+    <h2>Notes</h2>
+    <div class="panel">
+      {% if application and application.notes %}
+        {% for note in application.notes %}
+          <div class="note">{{ note.body }}<div class="help">{{ note.created_at|timeago }}</div></div>
+        {% endfor %}
+      {% else %}<p class="sub">No notes yet.</p>{% endif %}
+      <form method="post" action="/job/{{ job.id }}/note">
+        <textarea name="body" placeholder="e.g. Contacted recruiter John; need referral; follow up Sept 10"></textarea>
+        <button class="btn" type="submit" style="margin-top:8px">Add note</button>
+      </form>
+    </div>
+  </div>
+
+  <aside>
+    <div class="panel" style="margin-bottom:14px">
+      <h3>Match score</h3>
+      <div class="{{ job.relevance_score|score_class }}" style="font-size:34px;font-weight:700">
+        <span class="v">{{ job.relevance_score|round|int }}</span><span style="font-size:15px;color:var(--muted)">/100</span>
+      </div>
+      {% set pm = priority_meta(job.priority) %}
+      <div style="margin:6px 0 12px">{{ pm.emoji }} {{ pm.label }}</div>
+      {% for name, comp in (job.score_breakdown or {}).items() %}
+        <div style="margin-bottom:7px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted)">
+            <span>{{ name|humanize }}</span><span>{{ comp.value }}</span>
+          </div>
+          <div class="bar"><i style="width:{{ comp.value }}%"></i></div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="panel" style="margin-bottom:14px">
+      <h3>Why this is a match</h3>
+      {% if job.match_reasons %}
+        <ul class="clean">{% for r in job.match_reasons %}<li>✓ {{ r }}</li>{% endfor %}</ul>
+      {% else %}<p class="sub">No specific reasons recorded.</p>{% endif %}
+      {% if job.concerns %}
+        <h3 style="margin-top:14px">Why you might skip</h3>
+        <ul class="clean">{% for c in job.concerns %}<li>⚠ {{ c }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% if job.missing_requirements %}
+        <h3 style="margin-top:14px">Missing requirements</h3>
+        <ul class="clean">{% for m in job.missing_requirements %}<li>✗ {{ m }}</li>{% endfor %}</ul>
+      {% endif %}
+    </div>
+
+    <div class="panel" style="margin-bottom:14px">
+      <h3>Key facts</h3>
+      {% set db = deadline_badge(job) %}
+      <ul class="clean">
+        <li><strong>Salary:</strong> {{ job|salary }}</li>
+        <li><strong>Posted:</strong> {{ job.date_posted|timeago if job.date_posted else 'Unknown' }}</li>
+        <li><strong>Discovered:</strong> {{ job.date_discovered|timeago }}</li>
+        <li><strong>Deadline:</strong> {{ db.emoji }} {{ db.text }}</li>
+        <li><strong>Sponsorship:</strong> {{ job.sponsorship|humanize }}</li>
+        {% if job.experience_required_years %}<li><strong>Experience:</strong> {{ job.experience_required_years }} years</li>{% endif %}
+        {% if job.terms %}<li><strong>Terms:</strong> {{ job.terms|join(', ') }}</li>{% endif %}
+        <li><strong>Freshness:</strong> {{ job.freshness|upper }}</li>
+      </ul>
+      {% if job.sponsorship_evidence %}
+        <div class="help" style="margin-top:8px">Evidence: &ldquo;{{ job.sponsorship_evidence[:220] }}&rdquo;</div>
+      {% endif %}
+    </div>
+
+    <div class="panel" style="margin-bottom:14px">
+      <h3>Found on {{ job.source_count }} source{{ '' if job.source_count == 1 else 's' }}</h3>
+      <ul class="clean">
+        {% for l in job.listings %}
+          <li>✓ <a href="{{ l.url or l.apply_url }}" target="_blank" rel="noopener">{{ l.source }}</a>
+            <span class="help">{{ l.source_kind|humanize }}{% if l.merge_method and l.merge_method != 'primary' %} · merged by {{ l.merge_method }}{% endif %}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    {% if job.skills %}
+    <div class="panel" style="margin-bottom:14px">
+      <h3>Skills</h3>
+      <div class="chips">
+        {% for s in job.skills %}
+          <span class="chip {% if s in assistant.emphasise %}good{% endif %}">{{ s }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="panel" style="margin-bottom:14px">
+      <h3>Application assistant</h3>
+      {% set rm = assistant.resume_match %}
+      {% if rm.recommended %}
+        <p><strong>Recommended resume:</strong> {{ rm.recommended.name }}<br>
+          <span class="help">Matches {{ rm.match_percent }}% of this posting's detected skills</span></p>
+      {% else %}
+        <p class="sub">{{ rm.note }}</p>
+      {% endif %}
+      {% if assistant.emphasise %}
+        <h3 style="margin-top:12px">Emphasise</h3>
+        <ul class="clean">{% for e in assistant.emphasise %}<li>• {{ e }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% if assistant.relevant_projects %}
+        <h3 style="margin-top:12px">Relevant projects</h3>
+        <ul class="clean">{% for p in assistant.relevant_projects %}<li>• {{ p }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% if assistant.talking_points %}
+        <h3 style="margin-top:12px">Talking points</h3>
+        <ul class="clean">{% for t in assistant.talking_points %}<li>• {{ t }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% if assistant.interview_topics %}
+        <h3 style="margin-top:12px">Interview topics</h3>
+        <div class="chips">{% for t in assistant.interview_topics %}<span class="chip">{{ t }}</span>{% endfor %}</div>
+      {% endif %}
+      {% if assistant.gaps %}
+        <h3 style="margin-top:12px">In the posting, not in your resume</h3>
+        <div class="chips">{% for g in assistant.gaps %}<span class="chip warn">{{ g }}</span>{% endfor %}</div>
+      {% endif %}
+    </div>
+
+    <div class="panel">
+      <h3>History</h3>
+      <ul class="clean">
+        {% for e in events[:12] %}
+          <li>{{ e.event_type|humanize }} <span class="help">— {{ e.created_at|timeago }}</span></li>
+        {% endfor %}
+      </ul>
+    </div>
+  </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<div class="sub">Everything the search and ranking engine uses. Nothing here is hardcoded.</div>
+
+{% if saved %}<div class="note">Settings saved.</div>{% endif %}
+{% if error %}<div class="note bad">Could not save: {{ error }}</div>{% endif %}
+
+<form method="post" action="/settings">
+
+<h2>Target roles</h2>
+<div class="panel">
+  <div class="field">
+    <label>One role per line. Optionally add a weight after a pipe: <span class="mono">FPGA Engineer Intern | 1.5</span></label>
+    <textarea name="roles" rows="10">{% for r in prefs.roles %}{{ r.name }}{% if r.weight != 1.0 %} | {{ r.weight }}{% endif %}
+{% endfor %}</textarea>
+    <div class="help">Each role is expanded into related search phrasings automatically.</div>
+  </div>
+</div>
+
+<h2>Keywords</h2>
+<div class="panel">
+  <div class="row">
+    <div class="field"><label>Positive (adds to score)</label>
+      <textarea name="keywords_positive" rows="8">{{ prefs.keywords.positive|join('\n') }}</textarea></div>
+    <div class="field"><label>Negative (subtracts from score)</label>
+      <textarea name="keywords_negative" rows="8">{{ prefs.keywords.negative|join('\n') }}</textarea></div>
+    <div class="field"><label>Hard exclude (removes the job entirely)</label>
+      <textarea name="keywords_exclude" rows="8">{{ prefs.keywords.hard_exclude|join('\n') }}</textarea>
+      <div class="help">Use sparingly — this is a filter, not a penalty.</div></div>
+  </div>
+</div>
+
+<h2>Locations</h2>
+<div class="panel">
+  <div class="field">
+    <label>One per line: <span class="mono">Pattern | bonus | alias, alias</span></label>
+    <textarea name="locations" rows="8">{% for r in prefs.locations.rules %}{{ r.pattern }} | {{ r.bonus }}{% if r.aliases %} | {{ r.aliases|join(', ') }}{% endif %}
+{% endfor %}</textarea>
+    <div class="help">Locations are never excluded unless you give a bonus of -999.</div>
+  </div>
+  <div class="row">
+    <div class="field"><label>Remote bonus</label>
+      <input name="remote_bonus" type="number" step="0.5" value="{{ prefs.locations.remote_bonus }}"></div>
+    <div class="field"><label>Other US bonus</label>
+      <input name="other_us_bonus" type="number" step="0.5" value="{{ prefs.locations.other_us_bonus }}"></div>
+  </div>
+</div>
+
+<h2>Companies</h2>
+<div class="panel">
+  <div class="note">
+    Preferred companies receive a ranking boost. They are <strong>not</strong> the search
+    universe — the system keeps discovering companies you have never listed.
+  </div>
+  <div class="row">
+    <div class="field"><label>Preferred (ranking boost)</label>
+      <textarea name="companies_preferred" rows="7">{{ prefs.companies.preferred|join('\n') }}</textarea></div>
+    <div class="field"><label>Blacklisted (excluded)</label>
+      <textarea name="companies_blacklisted" rows="7">{{ prefs.companies.blacklisted|join('\n') }}</textarea></div>
+    <div class="field"><label>Monitored (extra career-page checks)</label>
+      <textarea name="companies_monitored" rows="7">{{ prefs.companies.monitored|join('\n') }}</textarea></div>
+    <div class="field"><label>Preferred company types</label>
+      <textarea name="company_types" rows="7">{{ prefs.companies.preferred_types|join('\n') }}</textarea></div>
+  </div>
+</div>
+
+<h2>Internship constraints</h2>
+<div class="panel">
+  <div class="row">
+    <div class="field"><label>Internships only</label>
+      <input type="checkbox" name="internship_only" {% if prefs.constraints.internship_only %}checked{% endif %}></div>
+    <div class="field"><label>Graduation year</label>
+      <input name="graduation_year" type="number" value="{{ prefs.constraints.graduation_year or '' }}"></div>
+    <div class="field"><label>Max years of experience a posting may demand</label>
+      <input name="max_experience_years" type="number" step="0.5" value="{{ prefs.constraints.max_experience_years }}"></div>
+    <div class="field"><label>Minimum hourly compensation</label>
+      <input name="min_compensation_hourly" type="number" step="1" value="{{ prefs.constraints.min_compensation_hourly or '' }}"></div>
+    <div class="field"><label>I require visa sponsorship</label>
+      <input type="checkbox" name="requires_sponsorship" {% if prefs.constraints.requires_sponsorship %}checked{% endif %}></div>
+    <div class="field"><label>Filter out jobs that explicitly refuse sponsorship</label>
+      <input type="checkbox" name="hard_filter_sponsorship" {% if prefs.constraints.hard_filter_sponsorship %}checked{% endif %}>
+      <div class="help">Jobs with unknown sponsorship are never filtered.</div></div>
+  </div>
+  <div class="field"><label>Accepted terms (one per line, e.g. Summer 2026)</label>
+    <textarea name="seasons" rows="3">{{ prefs.constraints.seasons|join('\n') }}</textarea></div>
+</div>
+
+<h2>Scoring weights</h2>
+<div class="panel">
+  <div class="help" style="margin-bottom:12px">
+    Relative weights; they are normalised, so they need not add to 100.
+  </div>
+  <div class="row">
+    {% for name, value in [('role_match', prefs.weights.role_match),
+                           ('technical_skills', prefs.weights.technical_skills),
+                           ('candidate_fit', prefs.weights.candidate_fit),
+                           ('location', prefs.weights.location),
+                           ('company_preference', prefs.weights.company_preference),
+                           ('freshness', prefs.weights.freshness),
+                           ('internship_constraints', prefs.weights.internship_constraints)] %}
+      <div class="field"><label>{{ name|humanize }}</label>
+        <input name="weight_{{ name }}" type="number" step="1" value="{{ value }}"></div>
+    {% endfor %}
+  </div>
+</div>
+
+<h2>Priority thresholds</h2>
+<div class="panel">
+  <div class="row">
+    <div class="field"><label>🔥 Apply now ≥</label>
+      <input name="threshold_apply_now" type="number" value="{{ prefs.thresholds.apply_now }}"></div>
+    <div class="field"><label>⭐ Strong match ≥</label>
+      <input name="threshold_strong_match" type="number" value="{{ prefs.thresholds.strong_match }}"></div>
+    <div class="field"><label>👍 Worth considering ≥</label>
+      <input name="threshold_worth_considering" type="number" value="{{ prefs.thresholds.worth_considering }}"></div>
+    <div class="field"><label>🟡 Maybe ≥</label>
+      <input name="threshold_maybe" type="number" value="{{ prefs.thresholds.maybe }}"></div>
+  </div>
+</div>
+
+<h2>Notifications</h2>
+<div class="panel">
+  <div class="row">
+    <div class="field"><label>Enabled</label>
+      <input type="checkbox" name="notifications_enabled" {% if prefs.notifications.enabled %}checked{% endif %}></div>
+    <div class="field"><label>Provider</label>
+      <select name="notification_provider">
+        {% for p in providers %}
+          <option value="{{ p.name }}" {% if prefs.notifications.provider == p.name %}selected{% endif %}>
+            {{ p.display_name }}{% if not p.configured %} (not configured){% endif %}
+          </option>
+        {% endfor %}
+      </select></div>
+    <div class="field"><label>Minimum score to notify</label>
+      <input name="notification_min_score" type="number" value="{{ prefs.notifications.min_score }}"></div>
+    <div class="field"><label>Max jobs per notification</label>
+      <input name="notification_max_jobs" type="number" value="{{ prefs.notifications.max_jobs_per_notification }}"></div>
+    <div class="field"><label>Send &ldquo;no matches today&rdquo; when empty</label>
+      <input type="checkbox" name="send_when_empty" {% if prefs.notifications.send_when_empty %}checked{% endif %}></div>
+    <div class="field"><label>Notify when a job materially changes</label>
+      <input type="checkbox" name="notify_on_updates" {% if prefs.notifications.notify_on_updates %}checked{% endif %}></div>
+  </div>
+  <div class="help">
+    A job is never sent twice unless it materially changed and the cooldown
+    ({{ prefs.notifications.update_cooldown_hours }}h) has elapsed.
+  </div>
+</div>
+
+<h2>Schedule</h2>
+<div class="panel">
+  <div class="row">
+    <div class="field"><label>Scheduler enabled</label>
+      <input type="checkbox" name="schedule_enabled" {% if prefs.schedule.enabled %}checked{% endif %}></div>
+    <div class="field"><label>Timezone</label>
+      <input name="timezone" value="{{ prefs.schedule.timezone }}"></div>
+    <div class="field"><label>Morning digest</label>
+      <input type="checkbox" name="morning_enabled" {% if prefs.schedule.morning_enabled %}checked{% endif %}>
+      <input name="morning_time" value="{{ prefs.schedule.morning_time }}" style="margin-top:6px;width:100%"></div>
+    <div class="field"><label>Afternoon digest</label>
+      <input type="checkbox" name="afternoon_enabled" {% if prefs.schedule.afternoon_enabled %}checked{% endif %}>
+      <input name="afternoon_time" value="{{ prefs.schedule.afternoon_time }}" style="margin-top:6px;width:100%"></div>
+    <div class="field"><label>Cadence</label>
+      <select name="cadence">
+        <option value="all" {% if prefs.schedule.cadence=='all' %}selected{% endif %}>Every day</option>
+        <option value="weekdays" {% if prefs.schedule.cadence=='weekdays' %}selected{% endif %}>Weekdays only</option>
+      </select></div>
+  </div>
+</div>
+
+<h2>Search scope &amp; sources</h2>
+<div class="panel">
+  <div class="row">
+    <div class="field"><label>Max ATS boards per run</label>
+      <input name="max_ats_boards" type="number" value="{{ prefs.scope.max_ats_boards_per_run }}">
+      <div class="help">Boards rotate least-recently-crawled first.</div></div>
+    <div class="field"><label>Max generated queries</label>
+      <input name="max_queries" type="number" value="{{ prefs.scope.max_expanded_queries }}"></div>
+    <div class="field"><label>Minimum score to store</label>
+      <input name="min_score_to_store" type="number" value="{{ prefs.scope.min_score_to_store }}"></div>
+    <div class="field"><label>Automatic query expansion</label>
+      <input type="checkbox" name="query_expansion" {% if prefs.scope.query_expansion %}checked{% endif %}></div>
+    <div class="field"><label>LLM semantic matching</label>
+      <input type="checkbox" name="llm_semantic_matching" {% if prefs.scope.llm_semantic_matching %}checked{% endif %}>
+      <div class="help">Requires ANTHROPIC_API_KEY and LLM_ENABLED=true.</div></div>
+    <div class="field"><label>LLM duplicate adjudication</label>
+      <input type="checkbox" name="llm_dedup_adjudication" {% if prefs.scope.llm_dedup_adjudication %}checked{% endif %}></div>
+  </div>
+
+  <div class="field">
+    <label>Disable specific sources</label>
+    <div class="chips">
+      {% for entry in catalog %}
+        <label class="chip" style="cursor:pointer">
+          <input type="checkbox" name="disabled_sources" value="{{ entry.name }}"
+            {% if entry.name in prefs.scope.disabled_sources %}checked{% endif %}>
+          {{ entry.display_name }}
+        </label>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:20px">
+  <button class="btn primary" type="submit">Save settings</button>
+</div>
+</form>
+{% endblock %}

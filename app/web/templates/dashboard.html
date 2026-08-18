@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Internship Search</h1>
+<div class="sub">
+  {% if runs %}
+    Last run {{ runs[0].started_at|timeago }} &middot;
+    {{ runs[0].raw_jobs_found }} raw listings &rarr; {{ runs[0].unique_jobs }} unique
+    &middot; {{ runs[0].duplicates_removed }} duplicates merged
+  {% else %}
+    No searches run yet &mdash; press &ldquo;Run search now&rdquo;.
+  {% endif %}
+</div>
+
+<div class="stats">
+  <div class="stat hot"><div class="n">{{ counts.apply_now }}</div><div class="l">🔥 Apply now</div></div>
+  <div class="stat strong"><div class="n">{{ counts.strong }}</div><div class="l">⭐ Strong matches</div></div>
+  <div class="stat"><div class="n">{{ counts.new_today }}</div><div class="l">🆕 New today</div></div>
+  <div class="stat"><div class="n">{{ counts.saved }}</div><div class="l">📌 Saved</div></div>
+  <div class="stat"><div class="n">{{ counts.applied }}</div><div class="l">📝 Applied</div></div>
+  <div class="stat"><div class="n">{{ counts.total_active }}</div><div class="l">Total active</div></div>
+</div>
+
+<form class="filters" method="get" action="/">
+  <input type="search" name="q" value="{{ filters.q or '' }}" placeholder="Search title, company, description">
+  <select name="priority">
+    <option value="">Any priority</option>
+    {% for p in facets.priorities %}
+      <option value="{{ p }}" {% if filters.priority==p %}selected{% endif %}>{{ priority_meta(p).emoji }} {{ priority_meta(p).label }}</option>
+    {% endfor %}
+  </select>
+  <select name="company">
+    <option value="">Any company</option>
+    {% for c in facets.companies %}<option value="{{ c }}" {% if filters.company==c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+  </select>
+  <select name="skill">
+    <option value="">Any skill</option>
+    {% for s in facets.skills %}<option value="{{ s }}" {% if filters.skill==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+  </select>
+  <select name="source">
+    <option value="">Any source</option>
+    {% for s in facets.sources %}<option value="{{ s }}" {% if filters.source==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+  </select>
+  <select name="remote">
+    <option value="">Any location type</option>
+    {% for r in ['remote','hybrid','onsite'] %}<option value="{{ r }}" {% if filters.remote==r %}selected{% endif %}>{{ r|title }}</option>{% endfor %}
+  </select>
+  <input type="number" name="min_score" value="{{ filters.min_score or '' }}" placeholder="Min score" style="width:110px">
+  <input type="number" name="posted_within_days" value="{{ filters.posted_within_days or '' }}" placeholder="Posted ≤ days" style="width:130px">
+  <select name="sort">
+    {% for value,label in [('score','Best match'),('date','Newest'),('deadline','Deadline'),('company','Company'),('discovered','Recently found')] %}
+      <option value="{{ value }}" {% if filters.sort==value %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <button class="btn primary" type="submit">Filter</button>
+  <a class="btn" href="/">Reset</a>
+</form>
+
+{% include "partials/job_list.html" %}
+{% endblock %}

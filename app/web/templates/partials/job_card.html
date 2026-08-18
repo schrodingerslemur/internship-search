@@ -1,0 +1,33 @@
+<div class="job" id="job-{{ job.id }}">
+  <div class="score {{ job.relevance_score|score_class }}">
+    <div class="v">{{ job.relevance_score|round|int }}</div>
+    <div class="m">/100</div>
+  </div>
+  <div class="body">
+    <div class="co">{{ job.company_name }}</div>
+    <div class="ti"><a href="/job/{{ job.id }}">{{ job.title }}</a></div>
+    <div class="meta">
+      {% set pm = priority_meta(job.priority) %}
+      <span>{{ pm.emoji }} {{ pm.label }}</span>
+      <span>📍 {{ job.location_raw or 'Location not listed' }}</span>
+      {% if job.date_posted %}<span>🕒 {{ job.date_posted|timeago }}</span>{% endif %}
+      {% if job.salary_min %}<span>💰 {{ job|salary }}</span>{% endif %}
+      {% if job.source_count > 1 %}
+        <span class="sources" title="{{ job.source_names|join(', ') }}">
+          Found on {{ job.source_count }} sources</span>
+      {% endif %}
+      {% if job.freshness in ('new','updated','reposted') %}
+        <span class="badge {{ job.freshness }}">{{ job.freshness|upper }}</span>
+      {% endif %}
+      {% set db = deadline_badge(job) %}
+      {% if db.level in ('urgent','soon') %}<span>{{ db.emoji }} {{ db.text }}</span>{% endif %}
+    </div>
+    {% if job.match_reasons %}
+      <div class="chips">
+        {% for reason in job.match_reasons[:5] %}<span class="chip good">✓ {{ reason }}</span>{% endfor %}
+        {% for c in job.concerns[:2] %}<span class="chip warn">⚠ {{ c }}</span>{% endfor %}
+      </div>
+    {% endif %}
+  </div>
+  {% include "partials/job_actions.html" %}
+</div>
