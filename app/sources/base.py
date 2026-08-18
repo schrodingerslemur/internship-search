@@ -125,14 +125,11 @@ class JobSource(abc.ABC):
             log.exception("source.crashed", source=self.name)
         else:
             outcome.jobs = jobs
-            outcome.status = "ok" if jobs or not self._expects_results(ctx) else "ok"
+            outcome.status = "ok"
             log.info("source.ok", source=self.name, jobs=len(jobs))
 
         outcome.duration_seconds = time.monotonic() - started
         return outcome
-
-    def _expects_results(self, ctx: SourceContext) -> bool:
-        return bool(ctx.queries or ctx.boards)
 
     # -- helpers for subclasses --
 

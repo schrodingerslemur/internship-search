@@ -188,3 +188,78 @@ class TestLocation:
     def test_description_html_only_listing(self):
         job = normalize_job(make_raw(description=FPGA_DESCRIPTION, location=None))
         assert job.location_raw is None
+
+
+class TestAmbiguousSkillMatching:
+    """Regression: ordinary words and unit symbols are not programming skills.
+
+    A real "Welding Engineering Intern" once scored 81/100 because "8 U.S.C.
+    1324b" in the legal boilerplate registered as the C language.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Immigration and Naturalization Act, 8 U.S.C. 1324b(a)(3)",
+            "Preheat the weld to 300 C before joining",
+            "See section C of the handbook",
+        ],
+    )
+    def test_bare_c_is_not_a_skill(self, text):
+        assert "c" not in extract_skills(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Proficient in C and C++",
+            "Experience with embedded C development",
+            "Strong C programming background",
+            "Comfortable with C/C++ toolchains",
+        ],
+    )
+    def test_real_c_is_still_detected(self, text):
+        assert "c" in extract_skills(text)
+
+    def test_prose_go_is_not_golang(self):
+        assert "go" not in extract_skills("Please go to our website to apply")
+
+    def test_golang_is_detected(self):
+        assert "go" in extract_skills("Backend services written in Golang")
+
+    def test_rf_requires_engineering_context(self):
+        assert "rf" not in extract_skills("Submit the rf form")
+        assert "rf" in extract_skills("RF front-end design for 5G")
+
+    def test_arm_requires_architecture_context(self):
+        assert "arm" not in extract_skills("Lift with your arm, not your back")
+        assert "arm" in extract_skills("ARM Cortex-M4 firmware")
+
+
+class TestIndustryMatching:
+    """Regression: two-letter industry names must not match inside words."""
+
+    def test_ai_does_not_match_inside_words(self, prefs):
+        from app.pipeline.match import score_company
+
+        job = normalize_job(
+            make_raw(
+                title="Welding Engineering Intern",
+                company="GE Aerospace",
+                description="Maintain aircraft welds. Available positions remain.",
+            )
+        )
+        component = score_company(job, prefs)
+        assert not any("ai" == r.split(": ")[-1] for r in component.reasons)
+
+    def test_real_industry_still_matches(self, prefs):
+        from app.pipeline.match import score_company
+
+        # A company not on the preferred list, so the industry check is reached.
+        job = normalize_job(
+            make_raw(
+                company="Unlisted Chips Inc",
+                description="We are a semiconductor company building custom chips.",
+            )
+        )
+        component = score_company(job, prefs)
+        assert any("semiconductor" in r.lower() for r in component.reasons)

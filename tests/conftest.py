@@ -26,6 +26,29 @@ from app.schemas.profile import default_profile  # noqa: E402
 NOW = datetime(2026, 8, 18, 12, 0, 0)
 
 
+@pytest.fixture(autouse=True)
+def isolate_data_dir(tmp_path, monkeypatch):
+    """Keep tests out of the real ./data directory.
+
+    The file notification provider and resume storage both default to the
+    application data directory; without this a test run would litter (or
+    overwrite) the user's actual files.
+    """
+    import app.config as config
+    import app.notify.providers as providers
+    import app.services.resumes as resumes
+
+    data_dir = tmp_path / "data"
+    (data_dir / "resumes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "cache").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(config, "DATA_DIR", data_dir)
+    monkeypatch.setattr(config, "RESUME_DIR", data_dir / "resumes")
+    monkeypatch.setattr(config, "CACHE_DIR", data_dir / "cache")
+    monkeypatch.setattr(providers, "DATA_DIR", data_dir)
+    monkeypatch.setattr(resumes, "RESUME_DIR", data_dir / "resumes")
+    yield
+
+
 @pytest.fixture
 def engine():
     engine = create_engine(

@@ -15,6 +15,7 @@ Two rules shape the design:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -243,7 +244,9 @@ def score_company(job: NormalizedJob, prefs: SearchPreferences) -> ComponentScor
         return component
 
     blob = normalize_text(f"{job.company} {job.description or ''}"[:2000])
-    hits = [t for t in types if t and t in blob]
+    # Word-boundary matching: a two-letter type like "AI" must not match inside
+    # "maintain" or "aircraft".
+    hits = [t for t in types if t and re.search(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", blob)]
     if hits:
         component.value = 75.0
         component.reasons.append(f"Preferred industry: {hits[0]}")

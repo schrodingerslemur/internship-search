@@ -273,7 +273,7 @@ async def run_search(
         report.boards_discovered = discovery.register_boards(session, harvested)
 
         failed_board_ids = _failed_board_ids(outcomes, boards)
-        discovery.record_board_results(session, boards, {}, failed_board_ids)
+        discovery.record_board_results(session, boards, failed_board_ids)
         discovery.prune_failed_boards(session)
 
         persisted = persist_clusters(

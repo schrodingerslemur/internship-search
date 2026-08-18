@@ -95,15 +95,45 @@ def _split_sections(text: str) -> dict[str, str]:
     return out
 
 
+#: Skills whose names are ordinary words, unit symbols, or legal shorthand.
+#: A word-boundary match is not enough for these -- "8 U.S.C. 1324b" must not
+#: register the C programming language, and "heat to 300 C" must not either --
+#: so each requires an explicit technical context.
+AMBIGUOUS_SKILL_PATTERNS: dict[str, str] = {
+    "c": (
+        r"\bc/c\+\+|\bc\+\+/c\b"
+        r"|\b(?:program\w*|cod\w+|develop\w*|written|writing|proficien\w+|experience|fluent|skills?)"
+        r"[^.]{0,30}?\bin\s+c\b"
+        r"|\b(?:embedded|ansi|bare[\s-]?metal)\s+c\b"
+        r"|\bc\s+(?:programming|language|compiler)\b"
+    ),
+    "go": r"\bgolang\b|\bgo\s+(?:programming|language)\b|\b(?:in|using|with)\s+go\b",
+    "r": r"\br\s+(?:programming|language|studio)\b|\brstudio\b|\b(?:in|using|with)\s+r\b",
+    "rf": r"\brf\s+(?:design|engineer\w*|circuit\w*|front[\s-]?end|system\w*|test\w*)\b|\bradio\s+frequency\b",
+    "arm": r"\barm\s+(?:cortex|architecture|processor|core|assembly|v\d)\b|\bcortex[\s-]?[amr]\b|\barm64\b",
+    "power": r"\bpower\s+(?:electronics|management|integrity|supply|converter|rail|delivery)\b|\blow[\s-]?power\s+design\b",
+    "swift": r"\bswift\s+(?:ui|programming|language)\b|\bswiftui\b",
+}
+
+
 def extract_skills(text: str, title: str = "") -> list[str]:
-    """Tag a posting with skills from the vocabulary."""
+    """Tag a posting with skills from the vocabulary.
+
+    Matching is boundary-aware, and genuinely ambiguous names additionally
+    require a technical context, so boilerplate and unit symbols cannot
+    masquerade as programming languages.
+    """
     hay = f" {(title + ' ' + text).lower()} "
     hay = re.sub(r"[\n\r\t]+", " ", hay)
     found: list[str] = []
     for skill in SKILL_VOCAB:
         needle = skill.lower()
-        if len(needle) <= 3:
-            # Short tokens (c, go, rf) need word boundaries to avoid false hits.
+        pattern = AMBIGUOUS_SKILL_PATTERNS.get(needle)
+        if pattern is not None:
+            if re.search(pattern, hay):
+                found.append(skill)
+        elif len(needle) <= 3:
+            # Short tokens still need boundaries to avoid matching inside words.
             if re.search(rf"(?<![a-z0-9+#]){re.escape(needle)}(?![a-z0-9+#])", hay):
                 found.append(skill)
         elif needle in hay:

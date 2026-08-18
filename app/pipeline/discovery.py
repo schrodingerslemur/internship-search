@@ -193,7 +193,7 @@ def select_boards_to_crawl(session: Session, limit: int) -> list[dict]:
 
 
 def record_board_results(
-    session: Session, boards: list[dict], results_by_provider: dict[str, int], failed: set[int]
+    session: Session, boards: list[dict], failed: set[int]
 ) -> None:
     """Update crawl bookkeeping for the boards attempted this run."""
     now = utcnow()
