@@ -21,6 +21,7 @@ from html import escape
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import Job, Notification, NotificationItem
 from app.models.base import (
     Freshness,
@@ -164,6 +165,112 @@ def _deadline_marker(job: Job, now: datetime) -> str:
     return ""
 
 
+# --------------------------------------------------------------------------
+# Email rendering
+#
+# Email clients strip <style> blocks and ignore most modern CSS, so the HTML
+# body is table-based with inline styles only -- the one layout that renders
+# the same in Gmail, Outlook and Apple Mail.
+# --------------------------------------------------------------------------
+
+_PRIORITY_COLORS: dict[str, str] = {
+    Priority.APPLY_NOW.value: "#d94f2b",
+    Priority.STRONG_MATCH.value: "#c98a12",
+    Priority.WORTH_CONSIDERING.value: "#2f7d4f",
+    Priority.MAYBE.value: "#6b7280",
+}
+
+_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+
+
+def _email_job_row(index: int, job: Job, now: datetime) -> str:
+    score = int(round(job.relevance_score or 0))
+    color = _PRIORITY_COLORS.get(job.priority, "#6b7280")
+    url = escape(job.application_url, quote=True)
+    reasons = "; ".join((job.match_reasons or [])[:2])
+    location = job.location_raw or "Location not listed"
+    meta = escape(location)
+    if job.source_count > 1:
+        meta += f" &middot; {job.source_count} sources"
+    deadline = _deadline_marker(job, now).strip()
+
+    parts = [
+        '<tr><td style="padding:14px 0;border-bottom:1px solid #e8e8e8;">',
+        f'<div style="font:600 16px/1.35 {_FONT};color:#111;">',
+        f'{index}. {escape(job.company_name)} &mdash; '
+        f'<a href="{url}" style="color:#1a5fb4;text-decoration:none;">{escape(job.title)}</a>',
+        "</div>",
+        f'<div style="font:600 13px/1.6 {_FONT};color:{color};">{score}/100'
+        + (f' <span style="color:#b3261e;">{escape(deadline)}</span>' if deadline else "")
+        + "</div>",
+    ]
+    if reasons:
+        parts.append(
+            f'<div style="font:400 13px/1.5 {_FONT};color:#444;">{escape(reasons)}</div>'
+        )
+    parts.append(f'<div style="font:400 13px/1.5 {_FONT};color:#666;">&#128205; {meta}</div>')
+    parts.append(
+        f'<div style="padding-top:6px;"><a href="{url}" '
+        f'style="font:600 13px/1 {_FONT};color:#fff;background:#1a5fb4;'
+        'padding:8px 14px;border-radius:6px;text-decoration:none;display:inline-block;">'
+        "Apply</a></div>"
+    )
+    parts.append("</td></tr>")
+    return "".join(parts)
+
+
+def _email_subject(label: str, date_str: str, selection: DigestSelection) -> str:
+    """A subject line that is useful in a notification preview.
+
+    The counts go first because that is all a phone lock screen shows.
+    """
+    if selection.total_apply_now:
+        return f"🔥 {selection.total_apply_now} to apply to — {label}, {date_str}"
+    if selection.total_strong:
+        return f"⭐ {selection.total_strong} strong matches — {label}, {date_str}"
+    if selection.jobs:
+        return f"{len(selection.jobs)} new matches — {label}, {date_str}"
+    return f"{label} — {date_str}"
+
+
+def build_email_html(
+    selection: DigestSelection,
+    *,
+    title: str,
+    summary_lines: list[str],
+    base_url: str,
+    now: datetime,
+) -> str:
+    """Render the digest as a standalone HTML document for email clients."""
+    rows = "".join(_email_job_row(i, job, now) for i, job in enumerate(selection.jobs, start=1))
+    summary = "".join(
+        f'<div style="font:400 14px/1.7 {_FONT};color:#333;">{line}</div>'
+        for line in summary_lines
+    )
+    dash = escape(base_url, quote=True)
+    body_block = (
+        f'<tr><td style="padding-top:18px;font:700 12px/1 {_FONT};'
+        'color:#666;letter-spacing:.08em;">TOP MATCHES</td></tr>' + rows
+        if selection.jobs
+        else ""
+    )
+    return f"""<!doctype html>
+<html><body style="margin:0;padding:0;background:#f4f5f7;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 12px;">
+<tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border-radius:12px;padding:28px 24px;">
+<tr><td style="font:700 20px/1.3 {_FONT};color:#111;padding-bottom:8px;">&#128640; {escape(title)}</td></tr>
+<tr><td>{summary}</td></tr>
+{body_block}
+<tr><td style="padding-top:22px;">
+<a href="{dash}/" style="font:600 14px/1 {_FONT};color:#1a5fb4;text-decoration:none;">View the full dashboard &rarr;</a>
+</td></tr>
+<tr><td style="padding-top:18px;font:400 12px/1.5 {_FONT};color:#999;">
+Internship Search Agent &middot; nothing is ever submitted on your behalf.
+</td></tr>
+</table></td></tr></table></body></html>"""
+
+
 def build_digest(
     selection: DigestSelection,
     kind: NotificationKind,
@@ -231,10 +338,19 @@ def build_digest(
     text = "\n".join(header_plain + body_plain + footer_plain).strip()
     rich = "\n".join(header_html + body_html + footer_html).strip()
 
+    html = build_email_html(
+        selection,
+        title=f"{label} — {date_str}",
+        summary_lines=[escape(line) for line in header_plain[2:]],
+        base_url=base_url,
+        now=now,
+    )
+
     return NotificationMessage(
         text=text,
         rich_text=rich,
-        subject=f"{label} — {date_str}",
+        html=html,
+        subject=_email_subject(label, date_str, selection),
         job_ids=[j.id for j in selection.jobs],
         links=[(j.title, j.application_url) for j in selection.jobs],
     )
@@ -244,4 +360,16 @@ def build_empty_digest(kind: NotificationKind, *, now: datetime | None = None) -
     now = now or utcnow()
     date_str = _format_date(now)
     text = f"\U0001f50d Internship Search — {date_str}\n\nNo strong new matches today."
-    return NotificationMessage(text=text, rich_text=f"<b>{text}</b>", subject="No new matches")
+    html = build_email_html(
+        DigestSelection(),
+        title=f"Internship Search — {date_str}",
+        summary_lines=["No strong new matches this run."],
+        base_url=get_settings().public_base_url or "http://127.0.0.1:8000",
+        now=now,
+    )
+    return NotificationMessage(
+        text=text,
+        rich_text=f"<b>{text}</b>",
+        html=html,
+        subject=f"Internship Search — no new matches ({date_str})",
+    )

@@ -23,6 +23,9 @@ class NotificationMessage:
     subject: str | None = None
     #: Optional Markdown/HTML variant for providers that render formatting.
     rich_text: str | None = None
+    #: Optional standalone HTML document, for providers that render a full
+    #: page rather than a chat message (email). ``text`` remains the fallback.
+    html: str | None = None
     #: (label, url) pairs for providers that support link buttons.
     links: list[tuple[str, str]] = field(default_factory=list)
     job_ids: list[int] = field(default_factory=list)

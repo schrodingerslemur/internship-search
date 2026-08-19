@@ -46,6 +46,7 @@ def isolate_data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CACHE_DIR", data_dir / "cache")
     monkeypatch.setattr(providers, "DATA_DIR", data_dir)
     monkeypatch.setattr(resumes, "RESUME_DIR", data_dir / "resumes")
+
     yield
 
 

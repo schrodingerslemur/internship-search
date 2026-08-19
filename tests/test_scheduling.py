@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -137,3 +137,45 @@ class TestScheduleTimezoneBehaviour:
         east_next = eastern.get_next_fire_time(None, reference.astimezone(eastern.timezone))
         west_next = pacific.get_next_fire_time(None, reference.astimezone(pacific.timezone))
         assert east_next.utcoffset() != west_next.utcoffset()
+
+
+class TestDigestKindResolution:
+    """An externally scheduled run must label itself correctly."""
+
+    def test_explicit_kinds_are_honoured(self):
+        from app.cli import _resolve_kind
+        from app.models.base import NotificationKind
+
+        assert _resolve_kind("morning") is NotificationKind.MORNING_DIGEST
+        assert _resolve_kind("afternoon") is NotificationKind.AFTERNOON_DIGEST
+
+    def test_auto_reads_the_configured_timezone(self, monkeypatch):
+        """08:00 in New York is 12:00 UTC -- the label must follow the user."""
+        import app.cli as cli
+        from app.models.base import NotificationKind
+
+        class FakeDateTime:
+            @staticmethod
+            def now(tz=None):
+                from datetime import datetime as real
+
+                utc_noon = real(2026, 8, 19, 12, 30, tzinfo=UTC)
+                return utc_noon.astimezone(tz) if tz else utc_noon
+
+        monkeypatch.setattr(cli, "datetime", FakeDateTime)
+        assert cli._resolve_kind("auto") is NotificationKind.MORNING_DIGEST
+
+    def test_auto_picks_afternoon_later_in_the_day(self, monkeypatch):
+        import app.cli as cli
+        from app.models.base import NotificationKind
+
+        class FakeDateTime:
+            @staticmethod
+            def now(tz=None):
+                from datetime import datetime as real
+
+                utc_eight_pm = real(2026, 8, 19, 20, 30, tzinfo=UTC)
+                return utc_eight_pm.astimezone(tz) if tz else utc_eight_pm
+
+        monkeypatch.setattr(cli, "datetime", FakeDateTime)
+        assert cli._resolve_kind("auto") is NotificationKind.AFTERNOON_DIGEST

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import smtplib
 from datetime import timedelta
 
 import pytest
@@ -11,7 +12,7 @@ from app.models.base import Freshness, JobStatus, NotificationKind, Priority
 from app.notify.base import NotificationMessage
 from app.notify.digest import build_digest, build_empty_digest, select_jobs_for_digest
 from app.notify.engine import send_digest
-from app.notify.providers import FileProvider, TelegramProvider, get_provider
+from app.notify.providers import EmailProvider, FileProvider, TelegramProvider, get_provider
 from tests.conftest import NOW
 
 
@@ -272,3 +273,166 @@ class TestProviders:
         result = await provider.send(NotificationMessage(text="hello", subject="s"))
         assert result.ok
         assert "hello" in (tmp_path / "notifications.jsonl").read_text(encoding="utf-8")
+
+
+def configured_email_provider(**overrides) -> EmailProvider:
+    """An EmailProvider with credentials, independent of the ambient .env."""
+    provider = EmailProvider()
+    provider.host = "smtp.example.com"
+    provider.port = 587
+    provider.user = "me@example.com"
+    provider.password = "app-password"
+    provider.starttls = True
+    provider.sender = "me@example.com"
+    provider.recipients = ["you@andrew.cmu.edu"]
+    for key, value in overrides.items():
+        setattr(provider, key, value)
+    return provider
+
+
+class TestEmailProvider:
+    def test_unconfigured_without_credentials(self):
+        assert configured_email_provider(password=None).is_configured() is False
+        assert configured_email_provider(recipients=[]).is_configured() is False
+
+    async def test_reports_error_rather_than_raising(self):
+        result = await configured_email_provider(host=None).send(NotificationMessage(text="hi"))
+        assert result.ok is False
+        assert "not configured" in result.error
+
+    def test_message_is_multipart_with_text_and_html(self):
+        mail = configured_email_provider()._build(
+            NotificationMessage(text="plain body", subject="Digest", html="<p>rich body</p>")
+        )
+        assert mail["Subject"] == "Digest"
+        assert "me@example.com" in mail["From"]
+        assert mail["To"] == "you@andrew.cmu.edu"
+        types = {part.get_content_type() for part in mail.walk()}
+        assert "text/plain" in types
+        assert "text/html" in types
+        assert "plain body" in mail.get_body(("plain",)).get_content()
+        assert "rich body" in mail.get_body(("html",)).get_content()
+
+    def test_text_only_message_still_sends(self):
+        """A provider must never require the HTML variant to exist."""
+        mail = configured_email_provider()._build(NotificationMessage(text="just text"))
+        assert mail.get_content_type() == "text/plain"
+        assert "just text" in mail.get_content()
+
+    def test_multiple_recipients_are_addressed(self):
+        provider = configured_email_provider(recipients=["a@x.com", "b@y.com"])
+        assert provider._build(NotificationMessage(text="t"))["To"] == "a@x.com, b@y.com"
+
+    async def test_successful_send_uses_starttls_and_login(self, monkeypatch):
+        calls: dict[str, object] = {}
+
+        class FakeSMTP:
+            def __init__(self, host, port, timeout=None):
+                calls["host"], calls["port"] = host, port
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def ehlo(self):
+                calls["ehlo"] = calls.get("ehlo", 0) + 1
+
+            def starttls(self, context=None):
+                calls["starttls"] = True
+
+            def login(self, user, password):
+                calls["login"] = (user, password)
+
+            def send_message(self, mail):
+                calls["sent_subject"] = mail["Subject"]
+
+        monkeypatch.setattr("app.notify.providers.smtplib.SMTP", FakeSMTP)
+        result = await configured_email_provider().send(
+            NotificationMessage(text="body", subject="Internship Search — Aug 18")
+        )
+
+        assert result.ok
+        assert calls["host"] == "smtp.example.com"
+        assert calls["starttls"] is True
+        assert calls["login"] == ("me@example.com", "app-password")
+        assert calls["sent_subject"] == "Internship Search — Aug 18"
+
+    async def test_port_465_uses_implicit_tls(self, monkeypatch):
+        used = {}
+
+        class FakeSMTPSSL:
+            def __init__(self, host, port, timeout=None, context=None):
+                used["ssl"] = True
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def login(self, user, password):
+                pass
+
+            def send_message(self, mail):
+                pass
+
+        monkeypatch.setattr("app.notify.providers.smtplib.SMTP_SSL", FakeSMTPSSL)
+        result = await configured_email_provider(port=465).send(NotificationMessage(text="b"))
+        assert result.ok
+        assert used["ssl"] is True
+
+    async def test_auth_failure_explains_app_passwords(self, monkeypatch):
+        def boom(self, mail):
+            raise smtplib.SMTPAuthenticationError(535, b"Username and Password not accepted")
+
+        monkeypatch.setattr(EmailProvider, "_send_sync", boom)
+        result = await configured_email_provider().send(NotificationMessage(text="b"))
+        assert result.ok is False
+        assert "app password" in result.error
+
+    async def test_transport_failure_is_reported_not_raised(self, monkeypatch):
+        def boom(self, mail):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(EmailProvider, "_send_sync", boom)
+        result = await configured_email_provider().send(NotificationMessage(text="b"))
+        assert result.ok is False
+        assert "connection refused" in result.error
+
+    def test_configured_email_is_preferred_over_unconfigured_telegram(self, monkeypatch):
+        """A deploy with SMTP set must not silently degrade to a file."""
+        monkeypatch.setattr(TelegramProvider, "is_configured", lambda self: False)
+        monkeypatch.setattr(EmailProvider, "is_configured", lambda self: True)
+        assert isinstance(get_provider("telegram"), EmailProvider)
+
+
+class TestEmailRendering:
+    def test_html_digest_is_a_standalone_document(self, session, rules):
+        make_job(session, title="FPGA Design Intern")
+        selection = select_jobs_for_digest(session, rules, now=NOW)
+        message = build_digest(
+            selection, NotificationKind.MORNING_DIGEST, base_url="https://example.fly.dev", now=NOW
+        )
+        assert message.html.startswith("<!doctype html>")
+        assert "FPGA Design Intern" in message.html
+        assert "https://example.fly.dev/" in message.html
+
+    def test_html_digest_escapes_job_text(self, session, rules):
+        make_job(session, title="Intern <script>alert(1)</script>", cid="xss")
+        selection = select_jobs_for_digest(session, rules, now=NOW)
+        message = build_digest(selection, NotificationKind.MORNING_DIGEST, now=NOW)
+        assert "<script>" not in message.html
+        assert "&lt;script&gt;" in message.html
+
+    def test_subject_leads_with_the_count(self, session, rules):
+        make_job(session, title="FPGA Design Intern")
+        selection = select_jobs_for_digest(session, rules, now=NOW)
+        message = build_digest(selection, NotificationKind.MORNING_DIGEST, now=NOW)
+        assert "1 to apply to" in message.subject
+
+    def test_empty_digest_has_html_too(self):
+        message = build_empty_digest(NotificationKind.MORNING_DIGEST, now=NOW)
+        assert message.html.startswith("<!doctype html>")
+        assert "No strong new matches" in message.html

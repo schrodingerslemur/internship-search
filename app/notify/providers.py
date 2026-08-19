@@ -1,12 +1,18 @@
 """Concrete notification providers.
 
-Telegram is the shipped phone channel. Console and file providers exist so the
-notification path is fully testable and usable before any credentials are set.
+Email (SMTP) and Telegram are the shipped delivery channels. Console and file
+providers exist so the notification path is fully testable and usable before
+any credentials are set.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import smtplib
+import ssl
+from email.message import EmailMessage
+from email.utils import formataddr, formatdate, make_msgid
 from pathlib import Path
 
 import httpx
@@ -80,6 +86,90 @@ class TelegramProvider(NotificationProvider):
         return SendResult(True, self.name)
 
 
+class EmailProvider(NotificationProvider):
+    """Sends the digest as a multipart HTML email over SMTP.
+
+    Plain SMTP rather than a vendor API, so any provider works: a Gmail
+    account with an app password, a university relay, Fastmail, SES. The
+    message is multipart/alternative, so a client that refuses HTML still
+    shows the full text digest.
+    """
+
+    name = "email"
+    display_name = "Email (SMTP)"
+    required_config = ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "EMAIL_TO")
+
+    def __init__(self) -> None:
+        settings = get_settings()
+        self.host = settings.smtp_host
+        self.port = settings.smtp_port
+        self.user = settings.smtp_user
+        self.password = settings.smtp_password
+        self.starttls = settings.smtp_starttls
+        self.sender = settings.email_sender
+        # A comma-separated list is accepted so a digest can go to two inboxes.
+        self.recipients = [r.strip() for r in (settings.email_to or "").split(",") if r.strip()]
+
+    def is_configured(self) -> bool:
+        return bool(self.host and self.password and self.sender and self.recipients)
+
+    def _build(self, message: NotificationMessage) -> EmailMessage:
+        mail = EmailMessage()
+        mail["Subject"] = message.subject or "Internship Search digest"
+        mail["From"] = formataddr(("Internship Search", self.sender or ""))
+        mail["To"] = ", ".join(self.recipients)
+        mail["Date"] = formatdate(localtime=True)
+        mail["Message-ID"] = make_msgid(domain="internship-search.local")
+        # Groups digests into one Gmail thread instead of flooding the inbox
+        # with a separate conversation twice a day.
+        mail["References"] = "<internship-search-digest@internship-search.local>"
+        mail.set_content(message.text)
+        if message.html:
+            mail.add_alternative(message.html, subtype="html")
+        return mail
+
+    def _send_sync(self, mail: EmailMessage) -> None:
+        """Blocking SMTP conversation, run off the event loop by :meth:`send`."""
+        context = ssl.create_default_context()
+        timeout = 30
+        # Port 465 is implicit TLS; everything else negotiates STARTTLS.
+        if self.port == 465:
+            with smtplib.SMTP_SSL(self.host, self.port, timeout=timeout, context=context) as server:
+                if self.user:
+                    server.login(self.user, self.password or "")
+                server.send_message(mail)
+            return
+
+        with smtplib.SMTP(self.host, self.port, timeout=timeout) as server:
+            server.ehlo()
+            if self.starttls:
+                server.starttls(context=context)
+                server.ehlo()
+            if self.user:
+                server.login(self.user, self.password or "")
+            server.send_message(mail)
+
+    async def send(self, message: NotificationMessage) -> SendResult:
+        if not self.is_configured():
+            return SendResult(False, self.name, error="SMTP_HOST/USER/PASSWORD/EMAIL_TO not configured")
+
+        mail = self._build(message)
+        try:
+            await asyncio.to_thread(self._send_sync, mail)
+        except smtplib.SMTPAuthenticationError as exc:
+            # Overwhelmingly the failure mode: a normal password was used
+            # where the provider requires an app password.
+            return SendResult(
+                False,
+                self.name,
+                error=f"SMTP auth rejected ({exc.smtp_code}); an app password is usually required",
+            )
+        except (smtplib.SMTPException, OSError) as exc:
+            return SendResult(False, self.name, error=f"{type(exc).__name__}: {exc}")
+
+        return SendResult(True, self.name, detail=f"sent to {len(self.recipients)} recipient(s)")
+
+
 class ConsoleProvider(NotificationProvider):
     """Logs the digest. Useful for dry runs and local development."""
 
@@ -123,26 +213,42 @@ class FileProvider(NotificationProvider):
 #: Everything the notification engine can dispatch to.
 PROVIDERS: dict[str, type[NotificationProvider]] = {
     TelegramProvider.name: TelegramProvider,
+    EmailProvider.name: EmailProvider,
     ConsoleProvider.name: ConsoleProvider,
     FileProvider.name: FileProvider,
 }
 
 
-def get_provider(name: str) -> NotificationProvider:
-    """Instantiate a provider, falling back to the file provider.
+#: Tried in order when the configured provider cannot send. Email first: a
+#: deployment whose SMTP credentials are set should reach the inbox even if
+#: preferences still name a channel that was never finished being set up.
+FALLBACK_ORDER: tuple[str, ...] = (EmailProvider.name, TelegramProvider.name)
 
-    Falling back rather than failing means a digest is never lost just because
-    Telegram is not set up yet.
+
+def get_provider(name: str) -> NotificationProvider:
+    """Instantiate a provider, degrading to a real channel and then to a file.
+
+    Degrading rather than failing means a digest is never lost just because
+    the selected channel was never finished being set up.
     """
     cls = PROVIDERS.get(name)
     if cls is None:
         log.warning("notify.unknown_provider", provider=name)
-        return FileProvider()
-    provider = cls()
-    if not provider.is_configured():
+    else:
+        provider = cls()
+        if provider.is_configured():
+            return provider
         log.warning("notify.provider_unconfigured", provider=name)
-        return FileProvider()
-    return provider
+
+    for fallback in FALLBACK_ORDER:
+        if fallback == name:
+            continue
+        candidate = PROVIDERS[fallback]()
+        if candidate.is_configured():
+            log.info("notify.provider_fallback", requested=name, using=fallback)
+            return candidate
+
+    return FileProvider()
 
 
 def provider_catalog() -> list[dict[str, object]]:

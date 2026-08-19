@@ -301,7 +301,9 @@ async def run_search(
             prefs_now = load_preferences(session)
             from app.notify.engine import send_digest
 
-            base_url = f"http://{settings.app_host}:{settings.app_port}"
+            # Digest links must be clickable from a phone, so the deployed
+            # URL wins over the bind address whenever it is configured.
+            base_url = settings.public_base_url or f"http://{settings.app_host}:{settings.app_port}"
             notification, result = await send_digest(
                 session,
                 prefs_now.notifications,

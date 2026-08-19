@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from datetime import datetime
 
 from app.config import ensure_dirs, get_settings
 from app.logging_setup import configure_logging, get_logger
@@ -26,14 +27,36 @@ def _setup() -> None:
     configure_logging(settings.log_level, settings.log_format)
 
 
-async def _cmd_search(args: argparse.Namespace) -> int:
+def _resolve_kind(value: str):
+    """Which digest this run is, for the notification record.
+
+    ``auto`` reads the clock in the configured timezone, so an externally
+    scheduled run (a cron job, a CI workflow) is labelled correctly without
+    the caller having to know the schedule.
+    """
+    from zoneinfo import ZoneInfo
+
     from app.models.base import NotificationKind
+
+    if value == "morning":
+        return NotificationKind.MORNING_DIGEST
+    if value == "afternoon":
+        return NotificationKind.AFTERNOON_DIGEST
+
+    try:
+        local_hour = datetime.now(ZoneInfo(get_settings().timezone)).hour
+    except Exception:
+        local_hour = datetime.now().hour
+    return NotificationKind.MORNING_DIGEST if local_hour < 12 else NotificationKind.AFTERNOON_DIGEST
+
+
+async def _cmd_search(args: argparse.Namespace) -> int:
     from app.pipeline.runner import run_search
 
     report = await run_search(
         trigger=args.trigger,
         notify=not args.no_notify,
-        notification_kind=NotificationKind.MORNING_DIGEST,
+        notification_kind=_resolve_kind(args.kind),
         dry_run=args.dry_run,
     )
 
@@ -76,38 +99,18 @@ async def _cmd_search(args: argparse.Namespace) -> int:
 
 async def _cmd_seed(args: argparse.Namespace) -> int:
     """Populate the ATS registry without running the whole pipeline."""
-    from app.db import session_scope
-    from app.pipeline import discovery
-    from app.sources.base import SourceContext
-    from app.sources.http import HttpClient
-    from app.sources.lists.github_lists import GithubInternshipLists
+    from app.services.bootstrap import seed_registry
 
-    source = GithubInternshipLists()
-    async with HttpClient() as http:
-        outcome = await source.run(SourceContext(http=http, queries=[]))
-
-    print(f"Fetched {outcome.job_count} listings from curated lists (status={outcome.status})")
-    if outcome.error:
-        print(f"  error: {outcome.error}")
-    if not outcome.jobs:
+    try:
+        stats = await seed_registry()
+    except Exception as exc:
+        print(f"Seed failed: {exc}", file=sys.stderr)
         return 1
 
-    with session_scope() as session:
-        from app.services.preferences import load_preferences
-
-        prefs = load_preferences(session)
-        preferred = {discovery.slugify_company(c) for c in prefs.companies.preferred}
-        blacklisted = {discovery.slugify_company(c) for c in prefs.companies.blacklisted}
-        companies = discovery.register_companies(
-            session, outcome.jobs, preferred=preferred, blacklisted=blacklisted
-        )
-        harvested = discovery.harvest_boards(outcome.jobs)
-        boards = discovery.register_boards(session, harvested)
-        summary = discovery.discovery_summary(session)
-
-    print(f"  companies registered : {companies} new")
-    print(f"  ATS boards harvested : {len(harvested)} found, {boards} newly registered")
-    print(f"  registry totals      : {summary['companies']} companies, {summary['boards']} boards")
+    print(f"Fetched {stats['listings']} listings from curated lists")
+    print(f"  companies registered : {stats['new_companies']} new")
+    print(f"  ATS boards harvested : {stats['boards_found']} found, {stats['new_boards']} newly registered")
+    print(f"  registry totals      : {stats['total_companies']} companies, {stats['total_boards']} boards")
     return 0
 
 
@@ -117,9 +120,17 @@ async def _cmd_notify_test(args: argparse.Namespace) -> int:
 
     with session_scope() as session:
         result = await send_test_notification(session, args.provider)
+    if result.provider != args.provider:
+        # Silently degrading is right for a scheduled digest, but a test that
+        # went somewhere else must say so, or the user thinks email works.
+        print(
+            f"WARNING: '{args.provider}' is not configured; fell back to "
+            f"'{result.provider}'. Check its credentials in .env.",
+            file=sys.stderr,
+        )
     if result.ok:
         print(f"Test notification sent via {result.provider}. {result.detail or ''}".strip())
-        return 0
+        return 0 if result.provider == args.provider else 1
     print(f"Failed to send via {result.provider}: {result.error}", file=sys.stderr)
     return 1
 
@@ -185,6 +196,12 @@ def main(argv: list[str] | None = None) -> int:
     p_search.add_argument("--no-notify", action="store_true", help="skip notifications")
     p_search.add_argument("--dry-run", action="store_true", help="build but do not send digests")
     p_search.add_argument("--trigger", default="manual")
+    p_search.add_argument(
+        "--kind",
+        choices=("auto", "morning", "afternoon"),
+        default="auto",
+        help="which digest this run is; 'auto' decides from the local clock",
+    )
 
     sub.add_parser("seed", help="seed companies and ATS boards from curated lists")
 

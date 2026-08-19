@@ -16,8 +16,14 @@ The system discovers employers you have never named — see
 
 ```bash
 python -m venv .venv
-.venv/Scripts/python -m pip install -e ".[dev]"     # Windows
-# source .venv/bin/activate && pip install -e ".[dev]"   # macOS / Linux
+
+# Activate it -- every `python` below must be the venv's interpreter,
+# otherwise you get ModuleNotFoundError: No module named 'pydantic_settings'.
+.venv\Scripts\Activate.ps1     # Windows (PowerShell)
+# .venv/Scripts/activate.bat    # Windows (cmd.exe)
+# source .venv/bin/activate     # macOS / Linux
+
+pip install -e ".[dev]"
 
 cp .env.example .env          # works as-is; no credentials required
 python -m alembic upgrade head
@@ -25,6 +31,11 @@ python -m app.cli seed        # populate the company + ATS registry
 python -m app.cli search      # run the pipeline once
 python -m app.cli serve       # dashboard at http://127.0.0.1:8000
 ```
+
+Not activating is optional -- you can call the interpreter directly instead,
+e.g. `.venv/Scripts/python -m app.cli serve`. What does *not* work is
+installing into `.venv` and then running a bare `python`, which resolves to
+your system interpreter.
 
 The MVP runs with **zero credentials**. Everything in Tier 1–3 below is public.
 
@@ -219,10 +230,11 @@ successive runs. Persistently failing boards back off but are never deleted.
 
 ## Notifications
 
-Telegram is the shipped phone channel; `NotificationProvider` makes adding
-Discord, Pushover, SMS, or email a subclass. Console and file providers exist so
-the path is testable before any credentials are set — an unconfigured Telegram
-falls back to a file rather than losing the digest.
+Email (SMTP) and Telegram are the shipped channels; `NotificationProvider` makes
+adding Discord, Pushover, or SMS a subclass. Console and file providers exist so
+the path is testable before any credentials are set, and an unconfigured channel
+degrades to the next configured one rather than losing the digest. See
+[Deployment](#deployment) for the email setup.
 
 A job reaches your phone only if it: scores at or above your minimum, has not
 been notified before, has not been dismissed or applied to, and is still active.
@@ -325,9 +337,11 @@ All settings are editable in the UI and stored as a validated document; `.env`
 only holds secrets and deployment settings. See `.env.example` — every key is
 optional except `DATABASE_URL`, which has a working default.
 
-For PostgreSQL:
+For PostgreSQL — local, or a free hosted one, see [Deployment](#deployment):
 
 ```bash
+# A provider's own `postgresql://...` string is accepted as pasted; the driver
+# is filled in for you.
 DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/internship
 pip install -e ".[postgres]"
 python -m alembic upgrade head
@@ -335,10 +349,180 @@ python -m alembic upgrade head
 
 ---
 
+## Deployment
+
+The digest has to arrive whether or not any machine of yours is switched on, so
+something has to run twice a day and remember what it already sent you. There
+are two shapes of that, and the difference is only *where the clock lives*.
+
+| | Free option | Always-on option |
+|---|---|---|
+| Schedule | GitHub Actions cron | the app's own APScheduler |
+| State | hosted Postgres (Neon free tier) | SQLite on a persistent volume |
+| Dashboard | run locally against the same database | public URL, 24/7 |
+| Cost | **$0** | Fly.io Hobby plan minimum, ~$5/month |
+
+Both send the identical email. Start free; the always-on setup is a drop-in
+upgrade later, and the database can move with you.
+
+### Email digests (needed by both)
+
+The `email` provider sends the digest as a multipart HTML email over plain SMTP,
+so any mail account works. With Gmail:
+
+1. Turn on 2-factor auth on your Google account.
+2. Create an app password at <https://myaccount.google.com/apppasswords>
+   (a normal account password **will** be rejected).
+3. Fill in `.env`:
+
+```bash
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=you@gmail.com
+SMTP_PASSWORD=abcdefghijklmnop     # the 16-char app password, spaces removed
+EMAIL_TO=you@andrew.cmu.edu        # comma-separated for multiple inboxes
+```
+
+4. Verify, then select the channel in **Settings → Notifications**:
+
+```bash
+python -m app.cli notify-test --provider email
+```
+
+Every digest is `multipart/alternative`, so a client that refuses HTML still
+gets the full text version. All digests share a `References` header, so Gmail
+threads them into one conversation rather than two new emails a day.
+
+If the configured provider is not set up, the engine degrades in order —
+email → Telegram → `data/notifications.jsonl` — so a digest is never lost.
+
+---
+
+### Option A — free: GitHub Actions + Neon Postgres
+
+Nothing is always-on, so nothing is billed. Actions supplies the schedule and
+the compute; a free hosted Postgres supplies the memory between runs, which is
+what makes "do not tell me about this job twice" work across runs that share no
+filesystem.
+
+**1. A database that outlives the runner.** Create a free project at
+<https://neon.tech> (no card) and copy the connection string. Paste it exactly
+as given — `postgresql://…` is rewritten to the driver SQLAlchemy needs.
+
+> Neon over Supabase here: Supabase pauses free projects after a week of
+> inactivity, which is exactly the failure mode a twice-daily job would hit.
+
+**2. Push the repository to GitHub**, then add these under
+*Settings → Secrets and variables → Actions*:
+
+| Secret | Value |
+|---|---|
+| `DATABASE_URL` | the Neon connection string |
+| `SMTP_HOST` | `smtp.gmail.com` |
+| `SMTP_USER` | your Gmail address |
+| `SMTP_PASSWORD` | the 16-character app password |
+| `EMAIL_TO` | where the digest should land |
+
+Any Tier-4 API keys you have can be added as secrets with the same names as in
+`.env`; the workflow passes them through, and absent ones simply leave that
+source unconfigured.
+
+**3. Run it once by hand** — *Actions → Internship digest → Run workflow* — to
+migrate the database and prove the email arrives. The first run is the slow one:
+it seeds the registry from the curated lists.
+
+That is the whole setup. `.github/workflows/digest.yml` then fires on its own.
+
+**Why four cron entries for two digests.** GitHub cron is UTC and ignores
+daylight saving, so each send time is scheduled at *both* of its possible UTC
+hours and the job's first step checks what time it actually is in New York,
+exiting in seconds when it is the wrong one. Without this, every digest would
+drift an hour twice a year.
+
+**The dashboard, locally.** Point your `.env` at the same `DATABASE_URL` and run
+`python -m app.cli serve`. You see exactly what the scheduled runs produced,
+and anything you save, dismiss or mark applied is respected by the next run.
+Set `SCHEDULER_ENABLED=false` locally so your laptop does not also send digests.
+
+**Two honest caveats.**
+
+- GitHub **disables scheduled workflows after 60 days without repository
+  activity**, and emails you when it does. Any commit re-enables them.
+- Scheduled runs are best-effort and queue behind GitHub's load; a digest can
+  land a few minutes late. It has never mattered for a job posting.
+
+Free minutes are not a concern: public repositories get unlimited Actions
+minutes, and a private repository's 2,000 free minutes comfortably cover two
+runs a day.
+
+---
+
+### Option B — always-on: Fly.io
+
+`Dockerfile`, `docker-entrypoint.sh` and `fly.toml` are checked in. The entrypoint
+runs migrations and then serves. Seeding the ATS registry takes minutes, so it is
+**not** done before the port binds — the app seeds itself in the background on
+first boot, deciding from the registry's own contents whether seeding is needed.
+
+```bash
+# Install flyctl, then:
+fly auth signup
+
+# Pick a unique name; --no-deploy so secrets can be set before the first boot.
+fly launch --no-deploy --name <your-app-name>
+
+# 1GB persistent volume for SQLite, resumes and the HTTP cache.
+fly volumes create internship_data --size 1 --region ewr
+
+fly secrets set \
+  SMTP_HOST=smtp.gmail.com \
+  SMTP_USER=you@gmail.com \
+  SMTP_PASSWORD='your-app-password' \
+  EMAIL_TO=you@andrew.cmu.edu \
+  DASHBOARD_PASSWORD='pick-something-long' \
+  PUBLIC_BASE_URL=https://<your-app-name>.fly.dev
+
+fly deploy
+fly logs                    # watch the migration, scheduler start, and seed
+```
+
+Then open `https://<your-app-name>.fly.dev`, log in with `me` and your
+`DASHBOARD_PASSWORD`, and set **Notifications → Provider** to `email`.
+
+Two settings in `fly.toml` are load-bearing:
+
+- `auto_stop_machines = false` and `min_machines_running = 1`. A scheduler that
+  is asleep at 08:00 does not send anything, so the machine is never suspended.
+- `memory = "512mb"`. A pipeline pass over thousands of listings will OOM at
+  256MB, even though serving the dashboard would not.
+
+**On cost:** Fly withdrew its free allowance for organisations created after
+late 2024, and its Hobby plan carries a $5/month minimum. This app's footprint
+sits under that minimum, so the practical cost is the plan minimum, not zero.
+An older organisation that still has the free allowance runs it for nothing.
+
+To use hosted Postgres here too, set `DATABASE_URL` and drop the `[[mounts]]`
+block; the image already installs the `postgres` extra.
+
+---
+
+### Securing a public deployment
+
+The dashboard exposes your profile, resumes, notes and application tracker.
+Setting `DASHBOARD_PASSWORD` puts HTTP basic auth in front of every page and
+every `/api` route; only `/health` stays open, because the platform's health
+check runs unauthenticated. With the variable unset the app logs a warning and
+stays open — fine on `127.0.0.1`, never on a public host.
+
+The free option never exposes a public dashboard at all, so it has no such
+surface: the only credentials that leave your machine are GitHub secrets.
+
+---
+
 ## Testing
 
 ```bash
-python -m pytest              # 242 tests
+python -m pytest              # 287 tests
 python -m ruff check app tests
 ```
 

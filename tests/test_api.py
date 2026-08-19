@@ -259,3 +259,126 @@ class TestPages:
         assert prefs["schedule"]["cadence"] == "weekdays"
         assert [r["name"] for r in prefs["roles"]] == ["FPGA Engineer Intern", "Robotics Intern"]
         assert prefs["roles"][0]["weight"] == 2.0
+
+
+class TestDashboardAuth:
+    """A public deployment must not expose the profile and tracker to anyone."""
+
+    @pytest.fixture
+    def protected_client(self, session, monkeypatch):
+        import app.main as main
+
+        settings = main.get_settings()
+        monkeypatch.setattr(settings, "dashboard_user", "me", raising=False)
+        monkeypatch.setattr(settings, "dashboard_password", "s3cret", raising=False)
+        app = main.create_app()
+        app.dependency_overrides[get_db] = lambda: session
+        with TestClient(app) as c:
+            yield c
+
+    def test_unauthenticated_request_is_rejected(self, protected_client):
+        response = protected_client.get("/")
+        assert response.status_code == 401
+        assert "Basic" in response.headers["www-authenticate"]
+
+    def test_api_is_protected_too(self, protected_client):
+        assert protected_client.get("/api/jobs").status_code == 401
+
+    def test_correct_credentials_are_accepted(self, protected_client):
+        assert protected_client.get("/", auth=("me", "s3cret")).status_code == 200
+
+    def test_wrong_password_is_rejected(self, protected_client):
+        assert protected_client.get("/", auth=("me", "wrong")).status_code == 401
+
+    def test_malformed_header_is_rejected_not_crashed(self, protected_client):
+        response = protected_client.get("/", headers={"Authorization": "Basic not-base64!!"})
+        assert response.status_code == 401
+
+    def test_health_check_stays_open(self, protected_client):
+        """Fly's health check runs unauthenticated; gating it fails the deploy."""
+        assert protected_client.get("/health").status_code == 200
+
+    def test_no_password_means_no_gate(self, client):
+        assert client.get("/health").status_code == 200
+        assert client.get("/").status_code == 200
+
+
+class TestFirstBootSeeding:
+    """Seeding must run once per database, and never block the port binding."""
+
+    @pytest.fixture
+    def bound_db(self, session, monkeypatch):
+        """Point bootstrap's own session_scope at the test database."""
+        import contextlib
+
+        import app.db as db
+
+        @contextlib.contextmanager
+        def scope():
+            yield session
+
+        monkeypatch.setattr(db, "session_scope", scope)
+
+    def test_empty_registry_needs_seeding(self, bound_db):
+        import app.services.bootstrap as bootstrap
+
+        assert bootstrap.needs_seed() is True
+
+    def test_populated_registry_is_not_reseeded(self, session, bound_db):
+        """An ephemeral runner pointed at a seeded database must not re-seed."""
+        import app.services.bootstrap as bootstrap
+        from app.models import AtsBoard
+
+        for i in range(bootstrap.MIN_SEEDED_BOARDS):
+            session.add(AtsBoard(provider="greenhouse", board_token=f"board-{i}"))
+        session.flush()
+        assert bootstrap.needs_seed() is False
+
+    def test_unreadable_database_does_not_start_a_seed(self, monkeypatch):
+        """A broken database is a reason to stop, not to fetch curated lists."""
+        import contextlib
+
+        import app.db as db
+        import app.services.bootstrap as bootstrap
+
+        @contextlib.contextmanager
+        def boom():
+            raise RuntimeError("no such table: ats_boards")
+            yield
+
+        monkeypatch.setattr(db, "session_scope", boom)
+        assert bootstrap.needs_seed() is False
+        assert bootstrap.schedule_seed() is None
+
+    async def test_seed_failure_is_swallowed_so_startup_survives(self, monkeypatch, bound_db):
+        import app.services.bootstrap as bootstrap
+
+        async def unreachable():
+            raise RuntimeError("curated lists unreachable")
+
+        monkeypatch.setattr(bootstrap, "seed_registry", unreachable)
+        await bootstrap.seed_if_needed()  # must not raise
+
+
+class TestDatabaseUrlNormalisation:
+    """A hosted provider's connection string must work as pasted."""
+
+    def _url(self, value: str) -> str:
+        from app.config import Settings
+
+        return Settings(database_url=value, _env_file=None).database_url
+
+    def test_neon_style_url_gains_a_driver(self):
+        assert self._url("postgresql://u:p@ep-x.neon.tech/db?sslmode=require") == (
+            "postgresql+psycopg://u:p@ep-x.neon.tech/db?sslmode=require"
+        )
+
+    def test_legacy_postgres_scheme_is_handled(self):
+        assert self._url("postgres://u:p@host/db").startswith("postgresql+psycopg://")
+
+    def test_explicit_driver_is_left_alone(self):
+        url = "postgresql+psycopg://u:p@host/db"
+        assert self._url(url) == url
+
+    def test_sqlite_is_untouched(self):
+        assert self._url("sqlite:///./data/internship.db") == "sqlite:///./data/internship.db"

@@ -6,10 +6,13 @@ and owns the scheduler lifecycle. One process, one port, one deploy.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import secrets
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.config import PROJECT_ROOT, ensure_dirs, get_settings
@@ -24,6 +27,13 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     ensure_dirs()
     configure_logging(settings.log_level, settings.log_format)
+
+    # First boot on a fresh volume: seed the registry in the background so the
+    # port binds immediately and the platform health check passes.
+    from app.services.bootstrap import schedule_seed
+
+    if schedule_seed() is not None:
+        log.info("bootstrap.seed_scheduled")
 
     scheduler = None
     if settings.scheduler_enabled:
@@ -44,6 +54,42 @@ async def lifespan(app: FastAPI):
         log.info("scheduler.stopped")
 
 
+#: Paths that must stay reachable without credentials -- the platform health
+#: check runs unauthenticated, and blocking it fails the deploy.
+_PUBLIC_PATHS: frozenset[str] = frozenset({"/health"})
+
+
+def _install_basic_auth(app: FastAPI, username: str, password: str) -> None:
+    """Gate the whole dashboard behind HTTP basic auth.
+
+    The dashboard exposes a personal profile, resumes and an application
+    tracker, so a public deployment must not be world-readable. Basic auth is
+    enough for a single user and costs no session storage.
+    """
+
+    @app.middleware("http")
+    async def require_auth(request: Request, call_next):
+        if request.url.path in _PUBLIC_PATHS:
+            return await call_next(request)
+
+        header = request.headers.get("authorization", "")
+        if header.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(header[6:]).decode("utf-8")
+                user, _, secret = decoded.partition(":")
+            except (binascii.Error, UnicodeDecodeError):
+                user, secret = "", ""
+            # compare_digest on both fields, so neither is a timing oracle.
+            if secrets.compare_digest(user, username) and secrets.compare_digest(secret, password):
+                return await call_next(request)
+
+        return Response(
+            status_code=401,
+            content="Authentication required.",
+            headers={"WWW-Authenticate": 'Basic realm="Internship Search"'},
+        )
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Internship Search Agent",
@@ -51,6 +97,13 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+
+    settings = get_settings()
+    if settings.dashboard_password:
+        _install_basic_auth(app, settings.dashboard_user, settings.dashboard_password)
+        log.info("auth.enabled", user=settings.dashboard_user)
+    else:
+        log.warning("auth.disabled")
 
     static_dir = PROJECT_ROOT / "app" / "web" / "static"
     static_dir.mkdir(parents=True, exist_ok=True)

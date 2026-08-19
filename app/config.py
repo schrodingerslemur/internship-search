@@ -35,10 +35,28 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: Literal["console", "json"] = "console"
     timezone: str = "America/New_York"
+    #: Public URL of the deployed dashboard, used for links inside digests.
+    #: Falls back to the local host/port when unset.
+    public_base_url: str | None = None
+    #: When set, the dashboard and API require HTTP basic auth. Unset means
+    #: open -- fine locally, never on a public host.
+    dashboard_user: str = "me"
+    dashboard_password: str | None = None
 
     # ---- Notifications ----
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
+
+    # ---- Email (SMTP) ----
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_user: str | None = None
+    smtp_password: str | None = None
+    smtp_starttls: bool = True
+    #: Defaults to ``smtp_user`` when unset -- most providers require the
+    #: envelope sender to be the authenticated account anyway.
+    email_from: str | None = None
+    email_to: str | None = None
 
     # ---- LLM ----
     anthropic_api_key: str | None = None
@@ -71,6 +89,26 @@ class Settings(BaseSettings):
     http_cache_ttl_seconds: int = 900
     user_agent: str = Field(default="internship-search-agent/0.1 (personal job search)")
 
+    @field_validator("database_url")
+    @classmethod
+    def _normalise_db_url(cls, v: str) -> str:
+        """Accept a hosted provider's connection string verbatim.
+
+        Neon, Supabase and Render all hand out ``postgresql://`` (or the older
+        ``postgres://``) URLs, which SQLAlchemy rejects for lack of a driver.
+        Rewriting here means the value can be pasted straight from the
+        provider's dashboard into a secret without silent breakage.
+        """
+        for prefix in ("postgresql://", "postgres://"):
+            if v.startswith(prefix):
+                return "postgresql+psycopg://" + v[len(prefix) :]
+        return v
+
+    @field_validator("public_base_url")
+    @classmethod
+    def _strip_slash(cls, v: str | None) -> str | None:
+        return v.rstrip("/") if v else v
+
     @field_validator("log_level")
     @classmethod
     def _upper(cls, v: str) -> str:
@@ -86,6 +124,18 @@ class Settings(BaseSettings):
     @property
     def telegram_available(self) -> bool:
         return bool(self.telegram_bot_token and self.telegram_chat_id)
+
+    @property
+    def email_sender(self) -> str | None:
+        return self.email_from or self.smtp_user
+
+    @property
+    def email_available(self) -> bool:
+        return bool(self.smtp_host and self.smtp_password and self.email_sender and self.email_to)
+
+    @property
+    def dashboard_protected(self) -> bool:
+        return bool(self.dashboard_password)
 
     def source_credentials(self) -> dict[str, dict[str, str | None]]:
         """Credential bundles keyed by source name.
