@@ -70,50 +70,200 @@ def canonical_id_for(job: NormalizedJob) -> str:
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
 
 
-def find_existing_job(session: Session, rep: NormalizedJob, cluster: JobCluster) -> Job | None:
+# --------------------------------------------------------------------------
+# Bulk identity lookup
+#
+# Resolving each cluster against the database individually costs five to ten
+# round trips per job. That is invisible against local SQLite and ruinous
+# against a hosted Postgres: 4,281 jobs took 34 minutes, against five for the
+# entire internet-facing search that produced them. The same information is
+# gathered here in a fixed handful of queries and then answered from memory.
+# --------------------------------------------------------------------------
+
+#: Well under the 65,535 bind-parameter ceiling psycopg enforces per statement.
+LOOKUP_CHUNK = 900
+
+#: Jobs written between flushes. Bounded so a long run cannot balloon the
+#: session's identity map, while still removing almost all the round trips.
+FLUSH_EVERY = 500
+
+
+def _chunked(values, size: int = LOOKUP_CHUNK):
+    seq = list(values)
+    for start in range(0, len(seq), size):
+        yield seq[start : start + size]
+
+
+class LookupIndex:
+    """Cross-run identity lookups for a whole run, prefetched in bulk.
+
+    Objects created during the run are registered back into the index, so two
+    clusters resolving to the same stored job still converge on it -- a
+    property that used to fall out of flushing after every single cluster.
+    """
+
+    def __init__(
+        self, session: Session, prepared: list[tuple[JobCluster, NormalizedJob]]
+    ) -> None:
+        self.session = session
+        self.listings_by_source_key: dict[tuple[str, str], JobListing] = {}
+        self.jobs_by_ats_identity: dict[str, Job] = {}
+        self.listings_by_ats_identity: dict[str, JobListing] = {}
+        self.listings_by_url_hash: dict[str, JobListing] = {}
+        self.jobs_by_fingerprint: dict[str, list[Job]] = {}
+        self.companies_by_slug: dict[str, Company] = {}
+        self.listings_by_job_id: dict[object, dict[tuple[str, str], JobListing]] = {}
+        self._load(prepared)
+
+    def _load(self, prepared: list[tuple[JobCluster, NormalizedJob]]) -> None:
+        source_ids: set[str] = set()
+        identities: set[str] = set()
+        hashes: set[str] = set()
+        fingerprints: set[str] = set()
+        slugs: set[str] = set()
+
+        for cluster, rep in prepared:
+            fingerprints.add(rep.fingerprint)
+            slugs.add(rep.company_slug)
+            for member in cluster.members:
+                if member.source_job_id:
+                    source_ids.add(member.source_job_id)
+                if member.ats_identity:
+                    identities.add(member.ats_identity)
+                if member.canonical_url_hash:
+                    hashes.add(member.canonical_url_hash)
+
+        # Matched on source_job_id alone, then narrowed by (source, id) in
+        # Python: one indexed IN beats a large OR of composite equalities.
+        for batch in _chunked(sorted(source_ids)):
+            for row in self.session.scalars(
+                select(JobListing).where(JobListing.source_job_id.in_(batch))
+            ).all():
+                self.listings_by_source_key[(row.source, row.source_job_id)] = row
+
+        for batch in _chunked(sorted(identities)):
+            for job in self.session.scalars(
+                select(Job).where(Job.ats_identity.in_(batch))
+            ).all():
+                self.jobs_by_ats_identity.setdefault(job.ats_identity, job)
+            for row in self.session.scalars(
+                select(JobListing).where(JobListing.ats_identity.in_(batch))
+            ).all():
+                self.listings_by_ats_identity.setdefault(row.ats_identity, row)
+
+        for batch in _chunked(sorted(hashes)):
+            for row in self.session.scalars(
+                select(JobListing).where(JobListing.canonical_url_hash.in_(batch))
+            ).all():
+                self.listings_by_url_hash.setdefault(row.canonical_url_hash, row)
+
+        for batch in _chunked(sorted(fingerprints)):
+            for job in self.session.scalars(
+                select(Job).where(Job.fingerprint.in_(batch), Job.company_name.is_not(None))
+            ).all():
+                self.jobs_by_fingerprint.setdefault(job.fingerprint, []).append(job)
+
+        for batch in _chunked(sorted(s for s in slugs if s)):
+            for company in self.session.scalars(
+                select(Company).where(Company.slug.in_(batch))
+            ).all():
+                self.companies_by_slug[company.slug] = company
+
+        job_ids = {job.id for job in self._candidate_jobs() if job.id is not None}
+        for batch in _chunked(sorted(job_ids)):
+            for row in self.session.scalars(
+                select(JobListing).where(JobListing.job_id.in_(batch))
+            ).all():
+                self.listings_by_job_id.setdefault(row.job_id, {})[
+                    (row.source, row.source_job_id)
+                ] = row
+
+    def _candidate_jobs(self):
+        seen: set[int] = set()
+        for job in self.jobs_by_ats_identity.values():
+            if id(job) not in seen:
+                seen.add(id(job))
+                yield job
+        for jobs in self.jobs_by_fingerprint.values():
+            for job in jobs:
+                if id(job) not in seen:
+                    seen.add(id(job))
+                    yield job
+        for row in self.listings_by_source_key.values():
+            job = row.job
+            if job is not None and id(job) not in seen:
+                seen.add(id(job))
+                yield job
+
+    # ---- registration of objects created during this run ----------------
+
+    def register_job(self, job: Job) -> None:
+        if job.ats_identity:
+            self.jobs_by_ats_identity.setdefault(job.ats_identity, job)
+        if job.fingerprint:
+            self.jobs_by_fingerprint.setdefault(job.fingerprint, []).append(job)
+
+    def register_listing(self, job: Job, listing: JobListing) -> None:
+        self.listings_by_source_key[(listing.source, listing.source_job_id)] = listing
+        if listing.ats_identity:
+            self.listings_by_ats_identity.setdefault(listing.ats_identity, listing)
+        if listing.canonical_url_hash:
+            self.listings_by_url_hash.setdefault(listing.canonical_url_hash, listing)
+        # Keyed by object identity: a job created this run has no primary key
+        # until the next flush, but still needs to accumulate its listings.
+        self.listings_by_job_id.setdefault(id(job), {})[
+            (listing.source, listing.source_job_id)
+        ] = listing
+
+    def listings_for_job(self, job: Job) -> dict[tuple[str, str], JobListing]:
+        """Listings already attached to this job, by (source, source_job_id)."""
+        by_pk = self.listings_by_job_id.get(job.id, {}) if job.id is not None else {}
+        by_obj = self.listings_by_job_id.get(id(job), {})
+        if not by_obj:
+            return by_pk
+        merged = dict(by_pk)
+        merged.update(by_obj)
+        return merged
+
+
+def find_existing_job(index: LookupIndex, rep: NormalizedJob, cluster: JobCluster) -> Job | None:
     """Locate the stored job this cluster belongs to.
 
     Tried in descending order of certainty, mirroring the dedup stages so that
     cross-run identity matches cross-source identity.
     """
-    # 1. Any listing we have already stored from these exact sources.
-    pairs = [(m.source, m.source_job_id) for m in cluster.members]
-    for source, source_job_id in pairs:
-        listing = session.scalar(
-            select(JobListing).where(
-                JobListing.source == source, JobListing.source_job_id == source_job_id
-            )
-        )
-        if listing is not None:
+    # 1. Any listing already stored from these exact sources.
+    for member in cluster.members:
+        listing = index.listings_by_source_key.get((member.source, member.source_job_id))
+        if listing is not None and listing.job is not None:
             return listing.job
 
     # 2. ATS identity, from any member.
-    identities = [m.ats_identity for m in cluster.members if m.ats_identity]
-    if identities:
-        job = session.scalar(select(Job).where(Job.ats_identity.in_(identities)))
+    for member in cluster.members:
+        if not member.ats_identity:
+            continue
+        job = index.jobs_by_ats_identity.get(member.ats_identity)
         if job is not None:
             return job
-        listing = session.scalar(select(JobListing).where(JobListing.ats_identity.in_(identities)))
-        if listing is not None:
+        listing = index.listings_by_ats_identity.get(member.ats_identity)
+        if listing is not None and listing.job is not None:
             return listing.job
 
     # 3. Canonical URL hash.
-    hashes = [m.canonical_url_hash for m in cluster.members if m.canonical_url_hash]
-    if hashes:
-        listing = session.scalar(
-            select(JobListing).where(JobListing.canonical_url_hash.in_(hashes))
-        )
-        if listing is not None:
+    for member in cluster.members:
+        if not member.canonical_url_hash:
+            continue
+        listing = index.listings_by_url_hash.get(member.canonical_url_hash)
+        if listing is not None and listing.job is not None:
             return listing.job
 
     # 4. Deterministic fingerprint -- inferential, so it gets the same guards
     #    the in-run deduplicator applies. Without this, "FPGA Intern" and
     #    "FPGA Intern - Fall 2026" would reunite across runs even though the
     #    deduplicator deliberately kept them apart.
-    candidates = session.scalars(
-        select(Job).where(Job.fingerprint == rep.fingerprint, Job.company_name.is_not(None))
-    ).all()
-    for job in candidates:
+    for job in index.jobs_by_fingerprint.get(rep.fingerprint, []):
+        if not job.company_name:
+            continue
         if slugify_company(job.company_name) != rep.company_slug:
             continue
         if _stored_job_conflicts(job, rep):
@@ -182,12 +332,18 @@ def persist_clusters(
     """Write canonical jobs and their per-source listings.
 
     ``scores`` is keyed by the cluster representative's ``key``.
+
+    Work is done in three passes rather than one: merge and score entirely in
+    memory, fetch every identity lookup the run needs in a handful of bulk
+    queries, then write. Listings and events are attached through their
+    relationships, so nothing needs a primary key before its flush and the
+    whole batch can be written a few hundred jobs at a time.
     """
     now = now or utcnow()
     outcome = PersistOutcome()
 
-    company_cache: dict[str, Company] = {}
-
+    # ---- pass 1: merge and filter, no database involved ----
+    prepared: list[tuple[JobCluster, NormalizedJob, MatchResult, str]] = []
     for cluster in clusters:
         rep = merge_cluster_facts(cluster, now=now)
         result = scores.get(rep.key)
@@ -195,18 +351,26 @@ def persist_clusters(
             continue
         if result.score < min_score_to_store:
             continue
-
         apply_url = rep.apply_url or rep.url or ""
         if not apply_url:
             continue
+        prepared.append((cluster, rep, result, apply_url))
 
-        company = company_cache.get(rep.company_slug)
-        if company is None:
-            company = session.scalar(select(Company).where(Company.slug == rep.company_slug))
-            if company is not None:
-                company_cache[rep.company_slug] = company
+    if not prepared:
+        session.flush()
+        return outcome
 
-        job = find_existing_job(session, rep, cluster)
+    # ---- pass 2: every lookup this run will need, in bulk ----
+    index = LookupIndex(session, [(cluster, rep) for cluster, rep, _, _ in prepared])
+
+    # ---- pass 3: write ----
+    new_jobs: list[Job] = []
+    pending = 0
+
+    for cluster, rep, result, apply_url in prepared:
+        company = index.companies_by_slug.get(rep.company_slug)
+
+        job = find_existing_job(index, rep, cluster)
         is_new = job is None
 
         if is_new:
@@ -230,14 +394,12 @@ def persist_clusters(
                 if job.status == JobStatus.EXPIRED.value:
                     job.status = JobStatus.NEW.value
                 outcome.reposted_jobs += 1
-                _add_event(session, job, "reposted", "Job reappeared in search results", run_id, now)
+                _add_event(job, "reposted", "Job reappeared in search results", run_id, now)
             elif changes:
                 job.freshness = Freshness.UPDATED.value
                 outcome.updated_jobs += 1
                 outcome.updated_job_ids.append(job.id)
-                _add_event(
-                    session, job, "updated", "Material change detected", run_id, now, changes
-                )
+                _add_event(job, "updated", "Material change detected", run_id, now, changes)
             else:
                 # Age the job out of NEW once it has been seen before.
                 if job.freshness in (Freshness.NEW.value, Freshness.UPDATED.value):
@@ -295,24 +457,31 @@ def persist_clusters(
         job.missing_requirements = result.missing_requirements
         job.score_breakdown = result.breakdown()
 
-        session.flush()
         if is_new:
-            outcome.new_job_ids.append(job.id)
-            _add_event(session, job, "discovered", f"Found on {len(cluster.members)} source(s)", run_id, now)
+            # Registered before the flush so a later cluster in this same run
+            # resolves to this job rather than creating a second copy.
+            index.register_job(job)
+            new_jobs.append(job)
+            _add_event(
+                job, "discovered", f"Found on {len(cluster.members)} source(s)", run_id, now
+            )
 
-        _upsert_listings(session, job, cluster, now)
+        _upsert_listings(index, job, cluster, now)
         outcome.stored_jobs.append(job)
 
+        pending += 1
+        if pending >= FLUSH_EVERY:
+            session.flush()
+            pending = 0
+
     session.flush()
+    outcome.new_job_ids.extend(job.id for job in new_jobs if job.id is not None)
     return outcome
 
 
-def _upsert_listings(session: Session, job: Job, cluster: JobCluster, now: datetime) -> None:
+def _upsert_listings(index: LookupIndex, job: Job, cluster: JobCluster, now: datetime) -> None:
     """Attach every source listing to the canonical job."""
-    existing = {
-        (row.source, row.source_job_id): row
-        for row in session.scalars(select(JobListing).where(JobListing.job_id == job.id)).all()
-    }
+    existing = index.listings_for_job(job)
     for member in cluster.members:
         key = (member.source, member.source_job_id)
         row = existing.get(key)
@@ -320,21 +489,18 @@ def _upsert_listings(session: Session, job: Job, cluster: JobCluster, now: datet
             # The listing may already be attached to a different job row if a
             # previous run split them; re-point it rather than violating the
             # uniqueness constraint.
-            row = session.scalar(
-                select(JobListing).where(
-                    JobListing.source == member.source,
-                    JobListing.source_job_id == member.source_job_id,
-                )
-            )
+            row = index.listings_by_source_key.get(key)
         if row is None:
             row = JobListing(
-                job_id=job.id,
                 source=member.source,
                 source_job_id=member.source_job_id,
                 first_seen_at=now,
             )
-            session.add(row)
-        row.job_id = job.id
+            # Appending through the relationship lets the unit of work fill in
+            # job_id, so a brand-new job needs no early flush to get one.
+            job.listings.append(row)
+        elif row.job is not job:
+            row.job = job
         row.source_kind = str(member.source_kind)
         row.url = member.url
         row.canonical_url = member.canonical_url
@@ -349,11 +515,10 @@ def _upsert_listings(session: Session, job: Job, cluster: JobCluster, now: datet
         row.is_active = True
         row.merge_method = cluster.merge_methods.get(member.key)
         row.merge_confidence = cluster.merge_confidence.get(member.key)
-    session.flush()
+        index.register_listing(job, row)
 
 
 def _add_event(
-    session: Session,
     job: Job,
     event_type: str,
     detail: str,
@@ -361,9 +526,8 @@ def _add_event(
     now: datetime,
     changes: dict | None = None,
 ) -> None:
-    session.add(
+    job.events.append(
         JobEvent(
-            job_id=job.id,
             event_type=event_type,
             detail=detail,
             changes=changes,
@@ -403,7 +567,7 @@ def expire_stale_jobs(
         job.expired_at = now
         if job.status not in TERMINAL_STATUSES:
             job.status = JobStatus.EXPIRED.value
-        _add_event(session, job, "expired", f"Not seen since {job.last_seen_at:%Y-%m-%d}", run_id, now)
+        _add_event(job, "expired", f"Not seen since {job.last_seen_at:%Y-%m-%d}", run_id, now)
         expired += 1
     session.flush()
     return expired

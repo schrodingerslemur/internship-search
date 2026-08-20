@@ -366,3 +366,100 @@ class TestOversizedValues:
         job.location_raw = "x" * 5000
         session.flush()
         assert len(job.location_raw) == self._column_length(Job, "location_raw")
+
+
+class TestPersistenceQueryCost:
+    """Round trips must not scale with the number of jobs.
+
+    Persistence resolved each cluster with its own SELECTs and its own flush.
+    Against local SQLite that is free; against a hosted Postgres it cost 34
+    minutes for 4,281 jobs -- seven times the entire internet-facing search
+    that produced them, and enough to run into the workflow timeout. These
+    tests fail if per-job querying comes back, which no assertion about
+    correctness would catch.
+    """
+
+    def _count_queries(self, session, fn):
+        from sqlalchemy import event
+
+        engine = session.get_bind()
+        statements: list[str] = []
+
+        def record(conn, cursor, statement, params, context, executemany):
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            fn()
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+        return statements
+
+    def _raws(self, n: int, offset: int = 0):
+        return [
+            make_raw(
+                title=f"FPGA Design Intern {i}",
+                company=f"Company {i}",
+                url=f"https://boards.greenhouse.io/co{i}/jobs/{i}",
+                source_job_id=f"co{i}-{i}",
+            )
+            for i in range(offset, offset + n)
+        ]
+
+    def _selects(self, statements):
+        return [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+
+    def test_lookup_queries_do_not_grow_with_job_count(self, session, prefs, profile):
+        """The lookups are prefetched, so their count is independent of volume.
+
+        INSERTs necessarily scale with the number of rows -- SQLAlchemy batches
+        those into few round trips on Postgres -- but the identity lookups that
+        caused the 34-minute run must stay flat.
+        """
+        # Disjoint company ranges, so both batches are first-time inserts and
+        # the only difference between them is volume.
+        small = self._selects(self._count_queries(
+            session, lambda: run_pipeline(session, self._raws(5), prefs, profile)
+        ))
+        big = self._selects(self._count_queries(
+            session,
+            lambda: run_pipeline(session, self._raws(60, offset=500), prefs, profile, run_id=2),
+        ))
+
+        assert len(big) == len(small), (
+            f"lookup queries scaled with job count: {len(small)} -> {len(big)}"
+        )
+
+    def test_a_large_batch_stays_within_a_flat_query_budget(self, session, prefs, profile):
+        selects = self._selects(self._count_queries(
+            session, lambda: run_pipeline(session, self._raws(200), prefs, profile)
+        ))
+        # Six: listings by source id, jobs and listings by ATS identity,
+        # listings by URL hash, jobs by fingerprint, and companies by slug.
+        assert len(selects) <= 10, f"expected a bulk-prefetch shape, got {len(selects)} SELECTs"
+
+    def test_everything_is_still_stored_correctly(self, session, prefs, profile):
+        """The optimisation must not lose rows -- the point of batching safely."""
+        outcome = run_pipeline(session, self._raws(40), prefs, profile)
+        assert outcome.new_jobs == 40
+        assert session.query(Job).count() == 40
+        assert session.query(JobListing).count() == 40
+        assert len(outcome.new_job_ids) == 40
+        assert all(i is not None for i in outcome.new_job_ids)
+
+    def test_a_second_run_reidentifies_rather_than_duplicating(self, session, prefs, profile):
+        """Cross-run identity still works without the per-cluster flush."""
+        raws = self._raws(25)
+        run_pipeline(session, raws, prefs, profile)
+        outcome = run_pipeline(session, raws, prefs, profile, run_id=2)
+
+        assert outcome.new_jobs == 0
+        assert session.query(Job).count() == 25
+        assert session.query(JobListing).count() == 25
+
+    def test_events_are_attached_to_the_right_jobs(self, session, prefs, profile):
+        run_pipeline(session, self._raws(10), prefs, profile)
+        events = session.query(JobEvent).filter(JobEvent.event_type == "discovered").all()
+        assert len(events) == 10
+        assert all(e.job_id is not None for e in events)
+        assert len({e.job_id for e in events}) == 10
