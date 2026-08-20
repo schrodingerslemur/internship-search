@@ -163,7 +163,10 @@
       <div class="field"><label>Password</label>
         <input name="smtp_password" type="password" autocomplete="new-password"
                placeholder="{{ '•••••••• (unchanged)' if channel.smtp_password else 'Gmail app password' }}">
-        <div class="help">Gmail needs an app password, not your account password.</div></div>
+        <div class="help">
+          Gmail needs an app password, not your account password. Paste it
+          exactly as Google shows it &mdash; the spaces are removed for you.
+        </div></div>
       <div class="field"><label>From address</label>
         <input name="email_from" value="{{ channel.email_from or '' }}"
                placeholder="defaults to the username"></div>
@@ -193,6 +196,11 @@
     {% endif %}
     <button class="btn sm" type="submit" formaction="/settings/test-channel" formnovalidate
             style="margin-left:8px">Save &amp; send test</button>
+    <div class="help" style="margin-top:8px">
+      A test that times out usually means this host blocks outbound mail, not
+      that the settings are wrong &mdash; the scheduled search sends from
+      elsewhere and is unaffected.
+    </div>
   </div>
 </div>
 
