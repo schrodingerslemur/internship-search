@@ -92,6 +92,16 @@ class UserJobState(Base, TimestampMixin):
     )
 
     status: Mapped[str] = mapped_column(String(30), default="new", nullable=False, index=True)
+
+    #: This job scored against *this* user's profile and weights. Null means it
+    #: has not been scored for them yet -- a job crawled before they signed up.
+    relevance_score: Mapped[float | None] = mapped_column(Float)
+    priority: Mapped[str | None] = mapped_column(String(30), index=True)
+    match_reasons: Mapped[list | None] = mapped_column(JSON)
+    concerns: Mapped[list | None] = mapped_column(JSON)
+    missing_requirements: Mapped[list | None] = mapped_column(JSON)
+    score_breakdown: Mapped[dict | None] = mapped_column(JSON)
+    scored_at: Mapped[datetime | None] = mapped_column(DateTime)
     notified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     notified_at: Mapped[datetime | None] = mapped_column(DateTime)
     saved_at: Mapped[datetime | None] = mapped_column(DateTime)

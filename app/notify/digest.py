@@ -18,11 +18,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from html import escape
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import Job, Notification, NotificationItem, User
+from app.models import Job, Notification, NotificationItem, User, UserJobState
 from app.models.base import (
     Freshness,
     NotificationKind,
@@ -46,6 +46,10 @@ class DigestSelection:
     total_apply_now: int = 0
     total_strong: int = 0
     total_updated: int = 0
+    #: This user's score and reasons per job, so rendering never falls back to
+    #: someone else's view of the same posting.
+    scores: dict[int, float] = field(default_factory=dict)
+    reasons_by_job: dict[int, list] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
@@ -88,10 +92,22 @@ def select_jobs_for_digest(
     user = user or get_or_create_user(session)
     selection = DigestSelection()
 
-    query = select(Job).where(Job.is_active.is_(True), Job.relevance_score >= rules.min_score)
+    # Threshold against this user's own score where one exists, falling back to
+    # the shared score for jobs crawled before they signed up.
+    user_score = (
+        select(UserJobState.relevance_score)
+        .where(UserJobState.job_id == Job.id, UserJobState.user_id == user.id)
+        .correlate(Job)
+        .scalar_subquery()
+    )
+    effective = func.coalesce(user_score, Job.relevance_score)
+
+    query = select(Job).where(Job.is_active.is_(True), effective >= rules.min_score)
     if candidate_ids:
         query = query.where(Job.id.in_(candidate_ids))
-    jobs = session.scalars(query.order_by(Job.relevance_score.desc())).all()
+    jobs = session.scalars(query.order_by(effective.desc())).all()
+
+    states = user_jobs.states_for(session, user, [j.id for j in jobs])
 
     notified = already_notified_job_ids(session, user)
     acted_on = user_jobs.acted_on_job_ids(session, user)
@@ -123,8 +139,15 @@ def select_jobs_for_digest(
 
     selection.total_new = sum(1 for j in selection.jobs if selection.reasons[j.id] == "new")
     selection.total_updated = sum(1 for j in selection.jobs if selection.reasons[j.id] == "update")
-    selection.total_apply_now = sum(1 for j in selection.jobs if j.priority == Priority.APPLY_NOW.value)
-    selection.total_strong = sum(1 for j in selection.jobs if j.priority == Priority.STRONG_MATCH.value)
+    def priority_for(job: Job) -> str:
+        return user_jobs.priority_of(states.get(job.id), job)
+
+    selection.total_apply_now = sum(
+        1 for j in selection.jobs if priority_for(j) == Priority.APPLY_NOW.value
+    )
+    selection.total_strong = sum(
+        1 for j in selection.jobs if priority_for(j) == Priority.STRONG_MATCH.value
+    )
 
     # Rank by priority first, then score, then recency.
     order = {
@@ -137,10 +160,18 @@ def select_jobs_for_digest(
     selection.jobs.sort(
         key=lambda j: (
             0 if selection.reasons[j.id] == "deadline" else 1,
-            order.get(j.priority, 5),
-            -(j.relevance_score or 0),
+            order.get(priority_for(j), 5),
+            -user_jobs.score_of(states.get(j.id), j),
         )
     )
+    # Carry the per-user numbers so the rendered digest shows this user's view.
+    selection.scores = {
+        j.id: user_jobs.score_of(states.get(j.id), j) for j in selection.jobs
+    }
+    selection.reasons_by_job = {
+        j.id: (states.get(j.id).match_reasons if states.get(j.id) else None) or j.match_reasons
+        for j in selection.jobs
+    }
     selection.jobs = selection.jobs[: max(1, rules.max_jobs_per_notification)]
     return selection
 
@@ -185,11 +216,19 @@ _PRIORITY_COLORS: dict[str, str] = {
 _FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 
 
-def _email_job_row(index: int, job: Job, now: datetime) -> str:
-    score = int(round(job.relevance_score or 0))
-    color = _PRIORITY_COLORS.get(job.priority, "#6b7280")
+def _email_job_row(
+    index: int,
+    job: Job,
+    now: datetime,
+    *,
+    score_override: float | None = None,
+    reasons_override: list | None = None,
+    priority_override: str | None = None,
+) -> str:
+    score = int(round(score_override if score_override is not None else (job.relevance_score or 0)))
+    color = _PRIORITY_COLORS.get(priority_override or job.priority, "#6b7280")
     url = escape(job.application_url, quote=True)
-    reasons = "; ".join((job.match_reasons or [])[:2])
+    reasons = "; ".join((reasons_override or job.match_reasons or [])[:2])
     location = job.location_raw or "Location not listed"
     meta = escape(location)
     if job.source_count > 1:
@@ -244,7 +283,16 @@ def build_email_html(
     now: datetime,
 ) -> str:
     """Render the digest as a standalone HTML document for email clients."""
-    rows = "".join(_email_job_row(i, job, now) for i, job in enumerate(selection.jobs, start=1))
+    rows = "".join(
+        _email_job_row(
+            i,
+            job,
+            now,
+            score_override=selection.scores.get(job.id),
+            reasons_override=selection.reasons_by_job.get(job.id),
+        )
+        for i, job in enumerate(selection.jobs, start=1)
+    )
     summary = "".join(
         f'<div style="font:400 14px/1.7 {_FONT};color:#333;">{line}</div>'
         for line in summary_lines
@@ -308,9 +356,9 @@ def build_digest(
     body_html = ["", "<b>TOP MATCHES</b>", ""]
 
     for index, job in enumerate(selection.jobs, start=1):
-        score = int(round(job.relevance_score or 0))
+        score = int(round(selection.scores.get(job.id, job.relevance_score or 0)))
         marker = _deadline_marker(job, now)
-        reason_bits = (job.match_reasons or [])[:2]
+        reason_bits = (selection.reasons_by_job.get(job.id) or job.match_reasons or [])[:2]
         reason = "; ".join(reason_bits)
         location = job.location_raw or "Location not listed"
         sources = job.source_count

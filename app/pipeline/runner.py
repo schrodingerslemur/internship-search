@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import session_scope
 from app.logging_setup import get_logger
-from app.models import AtsBoard, JobSourceRecord, SearchRun, SearchRunSource
+from app.models import AtsBoard, Job, JobSourceRecord, SearchRun, SearchRunSource
 from app.models.base import NotificationKind, Priority, RunStatus, SourceHealth, utcnow
 from app.pipeline import discovery
 from app.pipeline.dedupe import DedupResult, deduplicate
@@ -31,6 +31,7 @@ from app.pipeline.queries import generate_queries
 from app.schemas.job import NormalizedJob, RawJob, SourceOutcome
 from app.schemas.preferences import SearchPreferences
 from app.schemas.profile import CandidateProfileData
+from app.services import user_jobs
 from app.services.persistence import expire_stale_jobs, persist_clusters
 from app.services.preferences import load_preferences, load_profile
 from app.sources.base import SourceContext
@@ -308,8 +309,32 @@ async def run_search(
             # One crawl, many inboxes: each account is scored against its own
             # thresholds and sent to its own address. A failure for one user
             # must not cost everybody else their digest.
-            for user in all_active_users(session):
+            users = all_active_users(session)
+            touched_ids = list(
+                dict.fromkeys(report.new_job_ids + report.updated_job_ids)
+            )
+            touched = (
+                session.scalars(select(Job).where(Job.id.in_(touched_ids))).all()
+                if touched_ids
+                else []
+            )
+
+            for user in users:
                 prefs_now = load_preferences(session, user=user)
+                # Score this run's jobs against *this* account before deciding
+                # what to send: the same posting is a different prospect for
+                # two people with different profiles.
+                try:
+                    user_jobs.score_jobs_for_user(
+                        session,
+                        user,
+                        list(touched),
+                        prefs_now,
+                        load_profile(session, user=user),
+                        now=utcnow(),
+                    )
+                except Exception:
+                    log.exception("run.scoring_failed", user_id=user.id)
                 try:
                     notification, result = await send_digest(
                         session,

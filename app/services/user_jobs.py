@@ -143,3 +143,68 @@ def status_counts(session: Session, user: User) -> dict[str, int]:
         .group_by(UserJobState.status)
     ).all()
     return {status: count for status, count in rows}
+
+
+def score_jobs_for_user(
+    session: Session,
+    user: User,
+    jobs: list[Job],
+    prefs,
+    profile,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Score these jobs against one user's profile, storing the result.
+
+    Scoring is pure CPU over data already in memory, so doing it once per
+    account is cheap -- far cheaper than crawling the boards again, which is
+    what a second instance per person would cost.
+    """
+    from app.pipeline.match import score_job
+    from app.schemas.job import normalized_from_job_row
+
+    now = now or utcnow()
+    if not jobs:
+        return 0
+
+    existing = states_for(session, user, [j.id for j in jobs])
+    scored = 0
+
+    for job in jobs:
+        try:
+            candidate = normalized_from_job_row(job)
+        except Exception:
+            # A malformed stored row must not stop the other jobs being scored.
+            continue
+        result = score_job(candidate, prefs, profile, now=now)
+
+        state = existing.get(job.id)
+        if state is None:
+            state = UserJobState(user_id=user.id, job_id=job.id, status=JobStatus.NEW.value)
+            session.add(state)
+            existing[job.id] = state
+
+        state.relevance_score = result.score
+        state.priority = str(result.priority)
+        state.match_reasons = result.match_reasons
+        state.concerns = result.concerns
+        state.missing_requirements = result.missing_requirements
+        state.score_breakdown = result.breakdown()
+        state.scored_at = now
+        scored += 1
+
+    session.flush()
+    return scored
+
+
+def score_of(state: UserJobState | None, job: Job) -> float:
+    """This user's score, falling back to the shared one when unscored."""
+    if state is not None and state.relevance_score is not None:
+        return state.relevance_score
+    return job.relevance_score or 0.0
+
+
+def priority_of(state: UserJobState | None, job: Job) -> str:
+    if state is not None and state.priority:
+        return state.priority
+    return job.priority

@@ -138,6 +138,62 @@ class NormalizedJob(BaseModel):
         return "\n".join(parts)
 
 
+def normalized_from_job_row(job) -> NormalizedJob:
+    """Rebuild a scoreable candidate from a stored ``Job`` row.
+
+    Scoring needs the merged facts, not the provenance, so the dedup-only
+    fields are filled with harmless placeholders. This is what lets a job
+    crawled once be re-scored against a second person's profile without
+    re-fetching anything.
+    """
+    from app.pipeline.textutil import discriminators as _discriminators
+    from app.pipeline.textutil import slugify_company
+
+    body = job.requirements or job.description or ""
+    return NormalizedJob(
+        source="stored",
+        source_kind=SourceKind.UNKNOWN,
+        source_job_id=str(job.id),
+        ats_identity=job.ats_identity,
+        fingerprint=job.fingerprint or "",
+        content_hash=job.content_hash or "",
+        company=job.company_name,
+        company_slug=slugify_company(job.company_name),
+        title=job.title,
+        title_core=job.title_core or job.title,
+        discriminators=_discriminators(job.title, body),
+        location_raw=job.location_raw,
+        locations=list(job.locations or []),
+        city=job.city,
+        state=job.state,
+        country=job.country,
+        remote_status=RemoteStatus(job.remote_status or "unknown"),
+        employment_type=EmploymentType(job.employment_type or "unknown"),
+        description=job.description,
+        requirements=job.requirements,
+        responsibilities=job.responsibilities,
+        preferred_qualifications=job.preferred_qualifications,
+        salary_min=job.salary_min,
+        salary_max=job.salary_max,
+        salary_currency=job.salary_currency,
+        salary_period=job.salary_period,
+        salary_raw=job.salary_raw,
+        url=job.posting_url,
+        apply_url=job.application_url,
+        date_posted=job.date_posted,
+        date_updated=job.date_updated_source,
+        deadline=job.deadline,
+        deadline_is_explicit=bool(job.deadline_is_explicit),
+        requisition_id=job.requisition_id,
+        terms=list(job.terms or []),
+        skills=list(job.skills or []),
+        degree_requirements=list(job.degree_requirements or []),
+        experience_required_years=job.experience_required_years,
+        sponsorship=SponsorshipStatus(job.sponsorship or "unknown"),
+        sponsorship_evidence=job.sponsorship_evidence,
+    )
+
+
 class JobCluster(BaseModel):
     """A group of listings resolved to one canonical job."""
 

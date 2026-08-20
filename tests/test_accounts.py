@@ -388,3 +388,91 @@ class TestClaimingTheLegacyAccount:
         session.add(User(email="second@example.com", name="Second"))
         session.flush()
         assert auth.claimable_legacy_account(session) is None
+
+
+class TestPerUserScoring:
+    """The same posting is a different prospect for two different people."""
+
+    def _hardware_job(self, session):
+        job = Job(
+            canonical_job_id="hw-1",
+            fingerprint="fp-hw",
+            company_name="NVIDIA",
+            title="FPGA Design Intern",
+            title_core="fpga design intern",
+            application_url="https://example.com/fpga",
+            description="SystemVerilog RTL design and FPGA prototyping for silicon teams.",
+            requirements="Verilog, SystemVerilog, FPGA, digital design",
+            skills=["fpga", "verilog", "systemverilog"],
+            relevance_score=50.0,
+            locations=[],
+        )
+        session.add(job)
+        session.flush()
+        return job
+
+    def _score_for(self, session, user, job, *, skills):
+        from app.schemas.preferences import default_preferences
+        from app.schemas.profile import default_profile
+
+        prefs = default_preferences()
+        profile = default_profile()
+        # Replace every skill bucket, so the two profiles genuinely differ.
+        profile.technical_skills = list(skills)
+        profile.hardware_skills = []
+        profile.software_skills = []
+        user_jobs.score_jobs_for_user(session, user, [job], prefs, profile)
+        return user_jobs.get_state(session, user, job)
+
+    def test_two_profiles_score_the_same_job_differently(self, session, two_users):
+        hardware_person, software_person = two_users
+        job = self._hardware_job(session)
+
+        hw = self._score_for(
+            session, hardware_person, job, skills=["fpga", "systemverilog", "verilog"]
+        )
+        sw = self._score_for(
+            session, software_person, job, skills=["react", "typescript", "css"]
+        )
+
+        assert hw.relevance_score != sw.relevance_score
+        assert hw.relevance_score > sw.relevance_score
+
+    def test_scoring_does_not_touch_the_shared_job_row(self, session, two_users):
+        job = self._hardware_job(session)
+        original = job.relevance_score
+        self._score_for(session, two_users[0], job, skills=["fpga"])
+        assert job.relevance_score == original
+
+    def test_an_unscored_job_falls_back_to_the_shared_score(self, session, two_users):
+        job = self._hardware_job(session)
+        assert user_jobs.score_of(None, job) == 50.0
+
+    def test_scoring_preserves_an_existing_decision(self, session, two_users):
+        """Re-scoring must not resurrect a job you already dismissed."""
+        user = two_users[0]
+        job = self._hardware_job(session)
+        user_jobs.set_status(session, user, job, JobStatus.DISMISSED.value)
+
+        self._score_for(session, user, job, skills=["fpga"])
+
+        state = user_jobs.get_state(session, user, job)
+        assert state.status == JobStatus.DISMISSED.value
+        assert state.relevance_score is not None
+
+    def test_digests_use_each_users_own_threshold_and_score(self, session, two_users):
+        from app.notify.digest import select_jobs_for_digest
+        from app.schemas.preferences import NotificationRules
+
+        hardware_person, software_person = two_users
+        job = self._hardware_job(session)
+        self._score_for(session, hardware_person, job, skills=["fpga", "systemverilog"])
+        self._score_for(session, software_person, job, skills=["react", "css"])
+
+        hw_score = user_jobs.get_state(session, hardware_person, job).relevance_score
+        sw_score = user_jobs.get_state(session, software_person, job).relevance_score
+        cutoff = (hw_score + sw_score) / 2
+        rules = NotificationRules(provider="file", min_score=cutoff)
+
+        assert not select_jobs_for_digest(session, rules, user=hardware_person).is_empty
+        assert select_jobs_for_digest(session, rules, user=software_person).is_empty
