@@ -9,6 +9,9 @@
 #   SMTP_USER        you@gmail.com
 #   SMTP_PASSWORD    16-character Gmail app password
 #   EMAIL_TO         where the digest should land
+# Optional:
+#   PUBLIC_BASE_URL  https://<your-app>.onrender.com -- makes the digest's
+#                    dashboard link point somewhere real
 
 name: Internship digest
 
@@ -47,6 +50,11 @@ jobs:
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       EMAIL_TO: ${{ secrets.EMAIL_TO }}
+      # Makes the "View the full dashboard" link in each digest point at the
+      # deployed dashboard. Unset, it falls back to localhost, which is only
+      # useful if you happen to be running the app on the machine you read
+      # the email on.
+      PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
       # The scheduler is the workflow itself; an in-process one would never
       # live long enough to fire.
       SCHEDULER_ENABLED: "false"

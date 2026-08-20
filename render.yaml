@@ -1,0 +1,40 @@
+# Render blueprint for the dashboard, on the free plan.
+#
+# This hosts the *dashboard only*. The twice-daily digests are sent by the
+# GitHub Actions workflow, and the database lives in Neon, so this service
+# holds no state of its own: it can sleep, restart or be rebuilt without
+# losing anything or missing a digest.
+#
+# Set in the Render dashboard (marked sync: false below, so they are never
+# committed): DATABASE_URL and DASHBOARD_PASSWORD.
+
+services:
+  - type: web
+    name: internship-search
+    runtime: docker
+    plan: free
+    region: ohio          # same side of the country as the Neon project
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+
+    envVars:
+      # The Neon connection string, pasted as given.
+      - key: DATABASE_URL
+        sync: false
+      # Required. Without it the dashboard -- profile, resumes, tracker --
+      # would be readable by anyone who finds the URL.
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: DASHBOARD_USER
+        value: me
+      # The GitHub Actions workflow owns the schedule. A second scheduler here
+      # would send every digest twice.
+      - key: SCHEDULER_ENABLED
+        value: "false"
+      - key: TIMEZONE
+        value: America/New_York
+      - key: LOG_FORMAT
+        value: json
+      - key: APP_HOST
+        value: 0.0.0.0

@@ -10,5 +10,9 @@ set -e
 echo "==> running migrations"
 python -m alembic upgrade head
 
-echo "==> starting dashboard + scheduler on ${APP_HOST:-0.0.0.0}:${APP_PORT:-8080}"
-exec python -m uvicorn app.main:app --host "${APP_HOST:-0.0.0.0}" --port "${APP_PORT:-8080}"
+# Most PaaS hosts (Render, Railway, Heroku) assign the port at runtime via
+# $PORT and route to nothing else, so it has to win over the baked-in default.
+PORT_TO_BIND="${PORT:-${APP_PORT:-8080}}"
+
+echo "==> starting dashboard on ${APP_HOST:-0.0.0.0}:${PORT_TO_BIND}"
+exec python -m uvicorn app.main:app --host "${APP_HOST:-0.0.0.0}" --port "${PORT_TO_BIND}"

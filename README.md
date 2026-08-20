@@ -439,10 +439,31 @@ hours and the job's first step checks what time it actually is in New York,
 exiting in seconds when it is the wrong one. Without this, every digest would
 drift an hour twice a year.
 
-**The dashboard, locally.** Point your `.env` at the same `DATABASE_URL` and run
+**The dashboard.** Two ways, and they can coexist:
+
+*Locally* — point your `.env` at the same `DATABASE_URL` and run
 `python -m app.cli serve`. You see exactly what the scheduled runs produced,
 and anything you save, dismiss or mark applied is respected by the next run.
 Set `SCHEDULER_ENABLED=false` locally so your laptop does not also send digests.
+
+*Hosted, also free* — `render.yaml` deploys the dashboard to Render's free
+plan. This works precisely because the service is now stateless: the database
+is in Neon and the schedule is in Actions, so the dashboard holds nothing of
+its own and can sleep, restart or be rebuilt without losing anything or missing
+a digest.
+
+1. At <https://render.com>, *New → Blueprint*, point it at this repository.
+2. Set the two secrets it asks for: `DATABASE_URL` (the Neon string) and
+   `DASHBOARD_PASSWORD` (anything long — the dashboard shows your profile,
+   resumes and tracker, so this is not optional on a public URL).
+3. Once it is live, add the URL as a **`PUBLIC_BASE_URL` GitHub secret**, so
+   the "View the full dashboard" link in each digest points at it instead of
+   falling back to `localhost`.
+
+The free plan sleeps after 15 minutes of inactivity, so the first page load
+after a quiet spell takes 30–60 seconds while it wakes. For a dashboard opened
+a couple of times a day that is the right trade for $0; nothing about the
+digests depends on it being awake.
 
 **Two honest caveats.**
 
