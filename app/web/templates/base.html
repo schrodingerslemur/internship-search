@@ -21,6 +21,7 @@
   }
 }
 *{box-sizing:border-box}
+.lbl-icon{display:none}
 nav details.account{position:relative;margin-left:10px}
 nav details.account summary{list-style:none;cursor:pointer;width:30px;height:30px;border-radius:50%;
  background:var(--accent-dim);color:var(--text);display:grid;place-items:center;font-size:13px;font-weight:700}
@@ -163,6 +164,94 @@ label{font-size:12.5px;color:var(--muted);display:block;margin-bottom:4px}
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 .split{display:grid;grid-template-columns:2fr 1fr;gap:18px}
 @media(max-width:900px){.split{grid-template-columns:1fr}.kanban{grid-template-columns:repeat(7,240px)}}
+
+/* ---------------------------------------------------------------------
+   Phones. Everything above is written for a wide screen; these are the
+   overrides that make the same markup usable on a 360-430px device.
+   --------------------------------------------------------------------- */
+@media (max-width: 640px){
+  /* Bottom padding clears the floating bulk bar, so the last job card is
+     never stuck underneath it. */
+  main{padding:14px 12px 110px}
+
+  /* Everything must fit without scrolling: a scrolling nav pushed the
+     account menu off-screen entirely, so there was no way to sign out. */
+  nav{gap:0;flex-wrap:nowrap}
+  .lbl-full{display:none}
+  .lbl-icon{display:inline;font-size:15px;line-height:1}
+  nav form button{padding:7px 10px}
+  /* The wordmark is the least useful thing on a narrow screen; the rocket
+     still identifies the app. */
+  .brand-text{display:none}
+  nav .brand{padding:12px 10px 12px 0;font-size:17px}
+  nav a.tab{padding:12px 10px;font-size:13.5px;white-space:nowrap}
+  nav form{flex:0 0 auto}
+  nav details.account{margin-left:6px}
+
+  h1{font-size:19px}
+  h2{font-size:16px;margin:20px 0 10px}
+  .sub{font-size:12.5px}
+
+  /* 16px is the threshold below which iOS Safari zooms the page on focus,
+     which then leaves the layout scrolled sideways. */
+  /* .auth-form/.pw-form set their own 14px and out-specify a bare `input`
+     selector, so they have to be named explicitly or the sign-in page keeps
+     triggering the zoom this rule exists to prevent. */
+  input,select,textarea,
+  .auth-form input,.pw-form input{font-size:16px;padding:10px 12px}
+  form.filters{gap:7px}
+  form.filters select,form.filters input{flex:1 1 46%;min-width:0}
+  form.filters button{flex:1 1 100%}
+
+  /* Comfortable touch targets: the desktop sizes are ~30px tall. */
+  .btn{padding:10px 14px;font-size:13.5px}
+  .btn.sm{padding:8px 11px;font-size:12.5px}
+  .actions{gap:8px}
+
+  .stats{grid-template-columns:repeat(2,1fr);gap:9px}
+  .stat{padding:11px 12px}
+  .stat .n{font-size:21px}
+
+  /* .actions is a sibling of .body in a flex row: on a narrow screen five
+     buttons starved the text down to one word per line. Wrapping moves them
+     to their own full-width row underneath. */
+  .job{padding:12px;gap:10px;flex-wrap:wrap}
+  .job .body{flex:1 1 0;min-width:0}
+  .job .actions{flex:1 0 100%;margin-top:2px;padding-top:10px;
+   border-top:1px solid var(--line)}
+  .job .actions .btn{flex:1 1 auto;text-align:center}
+  .job .score{flex:0 0 44px}
+  .job .score .v{font-size:18px}
+  .job .co{font-size:14.5px}
+  .job .meta{gap:8px;font-size:12px}
+
+  /* Wide tables scroll inside themselves rather than widening the page. */
+  table{display:block;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  th,td{padding:8px;white-space:nowrap}
+
+  /* The Kanban board is inherently wide; let it scroll on its own. */
+  .kanban{grid-template-columns:repeat(7,80vw);gap:8px}
+
+  /* Full width beats centred once the screen is narrower than the bar, and
+     the safe-area inset keeps it clear of the iPhone home indicator. */
+  .bulkbar{left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));
+   transform:translateY(160%);justify-content:space-between;gap:6px;padding:10px}
+  .bulkbar.show{transform:translateY(0)}
+  .bulkbar button{padding:9px 10px;font-size:12.5px}
+  .bulkbar .n{padding:0;font-size:12px}
+
+  .auth-wrap{padding:16px;align-items:start;padding-top:8vh}
+  .auth-card{padding:22px 18px}
+  .split{gap:14px}
+  .prose{max-height:320px}
+}
+
+/* Very narrow devices, and large text settings. */
+@media (max-width: 380px){
+  .stats{grid-template-columns:1fr}
+  .bulkbar .clear{display:none}
+}
+
 .prose{font-size:13.5px;line-height:1.65;white-space:pre-wrap;color:var(--text);
  max-height:460px;overflow-y:auto;background:var(--panel-2);padding:13px;border-radius:8px}
 ul.clean{list-style:none;padding:0;margin:0}
@@ -173,14 +262,14 @@ ul.clean li{padding:3px 0;font-size:13px}
 {% if not hide_nav %}
 <header class="top">
   <nav>
-    <span class="brand">🚀 Internship Search</span>
+    <span class="brand">🚀<span class="brand-text"> Internship Search</span></span>
     <a class="tab {% if request.url.path=='/' %}active{% endif %}" href="/">Jobs</a>
     <a class="tab {% if request.url.path=='/tracker' %}active{% endif %}" href="/tracker">Tracker</a>
     <a class="tab {% if request.url.path in ['/coverage','/analytics'] %}active{% endif %}" href="/coverage">Insights</a>
     <a class="tab {% if request.url.path in ['/settings','/profile'] %}active{% endif %}" href="/settings">Settings</a>
     <span class="spacer"></span>
     <form method="post" action="/run-search" style="margin:0">
-      <button class="btn sm" type="submit">Run search</button>
+      <button class="btn sm" type="submit" title="Run search now"><span class="lbl-full">Run search</span><span class="lbl-icon">↻</span></button>
     </form>
     {% if current_user %}
     <details class="account">

@@ -28,12 +28,14 @@
       {% set db = deadline_badge(job) %}
       {% if db.level in ('urgent','soon') %}<span>{{ db.emoji }} {{ db.text }}</span>{% endif %}
     </div>
-    {% if job.match_reasons %}
+    {% if (v.reasons if v else job.match_reasons) %}
       <div class="chips">
-        {% for reason in job.match_reasons[:5] %}<span class="chip good">✓ {{ reason }}</span>{% endfor %}
+        {% for reason in ((v.reasons if v else job.match_reasons) or [])[:5] %}<span class="chip good">✓ {{ reason }}</span>{% endfor %}
         {% for c in job.concerns[:2] %}<span class="chip warn">⚠ {{ c }}</span>{% endfor %}
       </div>
     {% endif %}
   </div>
-  {% include "partials/job_actions.html" %}
+  {% with current_status = (v.status if v else job.status) %}
+    {% include "partials/job_actions.html" %}
+  {% endwith %}
 </div>

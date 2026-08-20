@@ -1,19 +1,22 @@
+{# `current_status` is this user's state; falls back to the shared row only
+   when a caller has not resolved it. #}
+{% set st = current_status if current_status is defined else job.status %}
 <div class="actions" id="actions-{{ job.id }}">
   <a class="btn primary sm" href="{{ job.application_url }}" target="_blank" rel="noopener">Apply</a>
   <a class="btn sm" href="/job/{{ job.id }}">Details</a>
-  {% if job.status != 'saved' %}
+  {% if st != 'saved' %}
   <form method="post" action="/job/{{ job.id }}/status" hx-post="/job/{{ job.id }}/status" hx-target="#actions-{{ job.id }}" hx-swap="outerHTML" style="margin:0">
     <input type="hidden" name="status" value="saved">
     <button class="btn sm" type="submit">Save</button>
   </form>
   {% endif %}
-  {% if job.status != 'applied' %}
+  {% if st != 'applied' %}
   <form method="post" action="/job/{{ job.id }}/status" hx-post="/job/{{ job.id }}/status" hx-target="#actions-{{ job.id }}" hx-swap="outerHTML" style="margin:0">
     <input type="hidden" name="status" value="applied">
     <button class="btn sm" type="submit">Mark applied</button>
   </form>
   {% endif %}
-  {% if job.status != 'dismissed' %}
+  {% if st != 'dismissed' %}
   <form method="post" action="/job/{{ job.id }}/status" hx-post="/job/{{ job.id }}/status" hx-target="#actions-{{ job.id }}" hx-swap="outerHTML" style="margin:0">
     <input type="hidden" name="status" value="dismissed">
     <button class="btn sm" type="submit">Dismiss</button>

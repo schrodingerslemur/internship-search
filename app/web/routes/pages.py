@@ -105,7 +105,13 @@ def job_status(
     # HTMX inline actions swap just the card's action bar.
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
-            request, "partials/job_actions.html", {"job": job, "redirect_to": redirect_to}
+            request,
+            "partials/job_actions.html",
+            {
+                "job": job,
+                "redirect_to": redirect_to,
+                "current_status": user_jobs.status_of(user_jobs.get_state(db, user, job)),
+            },
         )
     return RedirectResponse(redirect_to or "/", status_code=303)
 
