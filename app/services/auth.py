@@ -255,6 +255,10 @@ def claim_account(session: Session, user: User, *, email: str, password: str, na
     return user
 
 
+def all_accounts(session: Session) -> list[User]:
+    return list(session.scalars(select(User).order_by(User.id)).all())
+
+
 def account_count(session: Session) -> int:
     from sqlalchemy import func
 

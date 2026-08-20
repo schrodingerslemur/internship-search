@@ -612,3 +612,72 @@ class TestOneClickTriage:
             session, NotificationRules(provider="file", min_score=50.0), user=two_users[0]
         )
         assert _action_links(selection, two_users[0], "https://example.com", None) == {}
+
+
+class TestSetPasswordCommand:
+    """Recovery path for a forgotten password on a self-hosted instance."""
+
+    def _run(self, monkeypatch, session, argv):
+        import contextlib
+
+        import app.db as db
+        from app.cli import main
+
+        @contextlib.contextmanager
+        def scope():
+            yield session
+
+        monkeypatch.setattr(db, "session_scope", scope)
+        return main(argv)
+
+    def test_setting_a_known_password(self, monkeypatch, session):
+        auth.create_account(session, email="reset@example.com", password="original-password")
+
+        code = self._run(
+            monkeypatch, session,
+            ["set-password", "--email", "reset@example.com", "--password", "brand-new-password"],
+        )
+        assert code == 0
+        assert auth.authenticate(session, "reset@example.com", "brand-new-password") is not None
+        assert auth.authenticate(session, "reset@example.com", "original-password") is None
+
+    def test_generating_one_when_none_is_given(self, monkeypatch, session, capsys):
+        auth.create_account(session, email="gen@example.com", password="original-password")
+
+        assert self._run(monkeypatch, session, ["set-password", "--email", "gen@example.com"]) == 0
+        printed = capsys.readouterr().out
+        assert "new password:" in printed
+
+        generated = printed.split("new password:")[1].strip().splitlines()[0]
+        assert auth.authenticate(session, "gen@example.com", generated) is not None
+
+    def test_an_unknown_account_fails_loudly(self, monkeypatch, session):
+        auth.create_account(session, email="known@example.com", password="a-good-password")
+        assert self._run(
+            monkeypatch, session, ["set-password", "--email", "ghost@example.com"]
+        ) == 1
+
+    def test_a_weak_password_is_refused(self, monkeypatch, session):
+        auth.create_account(session, email="weak@example.com", password="a-good-password")
+        code = self._run(
+            monkeypatch, session,
+            ["set-password", "--email", "weak@example.com", "--password", "short"],
+        )
+        assert code == 1
+        # And the original still works, so a rejected reset is not a lockout.
+        assert auth.authenticate(session, "weak@example.com", "a-good-password") is not None
+
+    def test_resetting_keeps_the_account_and_its_data(self, monkeypatch, session, a_job):
+        """A reset must not orphan the tracker it exists to protect."""
+        user = auth.create_account(session, email="keep@example.com", password="a-good-password")
+        user_jobs.set_status(session, user, a_job, JobStatus.APPLIED.value)
+        user_id = user.id
+
+        self._run(
+            monkeypatch, session,
+            ["set-password", "--email", "keep@example.com", "--password", "a-new-password"],
+        )
+
+        same = auth.authenticate(session, "keep@example.com", "a-new-password")
+        assert same.id == user_id
+        assert user_jobs.status_of(user_jobs.get_state(session, same, a_job)) == "applied"

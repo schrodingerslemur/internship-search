@@ -114,6 +114,58 @@ async def _cmd_seed(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_set_password(args: argparse.Namespace) -> int:
+    """Set an account's password from the command line.
+
+    There is no self-service reset: the app sends no mail of its own, and a
+    reset link delivered through the digest channel would be a way in for
+    anyone who ever saw a digest. Whoever holds the database can reset a
+    password, which for a two-person instance is the honest boundary.
+    """
+    import secrets
+    import string
+
+    from app.db import session_scope
+    from app.services import auth
+
+    password = args.password
+    generated = False
+    if not password:
+        alphabet = string.ascii_letters + string.digits
+        password = "-".join(
+            "".join(secrets.choice(alphabet) for _ in range(5)) for _ in range(3)
+        )
+        generated = True
+
+    problem = auth.password_problem(password)
+    if problem:
+        print(problem, file=sys.stderr)
+        return 1
+
+    with session_scope() as session:
+        user = auth.find_by_email(session, args.email)
+        if user is None:
+            print(f"No account with email {args.email}", file=sys.stderr)
+            existing = [u.email for u in auth.all_accounts(session)]
+            if existing:
+                print("Known accounts: " + ", ".join(e or "(no email)" for e in existing))
+            return 1
+
+        user.password_hash = auth.hash_password(password)
+        user.is_active = True
+        session.flush()
+
+        # Prove the new password works before claiming success.
+        if auth.authenticate(session, args.email, password) is None:
+            print("Password was set but verification failed", file=sys.stderr)
+            return 1
+
+    print(f"Password updated for {args.email}")
+    if generated:
+        print(f"  new password: {password}")
+    return 0
+
+
 def _cmd_rescore(args: argparse.Namespace) -> int:
     """Re-score every stored job, for every account.
 
@@ -263,6 +315,10 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("rescore", help="re-score every stored job (after a scoring change)")
 
+    p_pw = sub.add_parser("set-password", help="set an account password")
+    p_pw.add_argument("--email", required=True)
+    p_pw.add_argument("--password", default=None, help="omit to generate a strong one")
+
     p_serve = sub.add_parser("serve", help="run the web dashboard")
     p_serve.add_argument("--host", default=None)
     p_serve.add_argument("--port", type=int, default=None)
@@ -277,6 +333,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_cmd_seed(args))
     if args.command == "notify-test":
         return asyncio.run(_cmd_notify_test(args))
+    if args.command == "set-password":
+        return _cmd_set_password(args)
     if args.command == "rescore":
         return _cmd_rescore(args)
     if args.command == "stats":
