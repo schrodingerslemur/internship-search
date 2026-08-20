@@ -39,7 +39,10 @@ concurrency:
 jobs:
   digest:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Run 3 took 39 minutes, 34 of them writing 4,281 jobs to a remote
+    # Postgres one round trip at a time. The registry only grows, so a 45
+    # minute cap was about one run away from cutting a digest off mid-write.
+    timeout-minutes: 120
 
     env:
       TZ: America/New_York
