@@ -242,7 +242,11 @@ def settings_page(
             "channel_missing": channel.missing_for(prefs.notifications.provider),
             "digest_email": user.notification_email,
             "saved": request.query_params.get("saved") == "1",
+            # `error` means the settings did not save. A delivery test that
+            # fails is a `notice`: the settings saved fine, the send did not.
             "error": request.query_params.get("error"),
+            "notice": request.query_params.get("notice"),
+            "notice_bad": request.query_params.get("notice_bad") == "1",
         },
     )
 
@@ -583,7 +587,8 @@ async def settings_test_channel(
         db.commit()
         missing = ", ".join(channel.missing_for(provider))
         return RedirectResponse(
-            f"/settings?error={quote(f'{provider} still needs: {missing}')}", status_code=303
+            f"/settings?notice_bad=1&notice={quote(f'Saved. {provider} still needs: {missing}')}",
+            status_code=303,
         )
 
     result = await send_test_notification(
@@ -594,10 +599,12 @@ async def settings_test_channel(
     if result.ok and result.provider == provider:
         target = user.notification_email if provider == "email" else provider
         return RedirectResponse(
-            f"/settings?saved=1&error={quote(f'Test sent via {provider} to {target}.')}",
+            f"/settings?notice={quote(f'Settings saved. Test sent via {provider} to {target}.')}",
             status_code=303,
         )
+
+    detail = result.error or f"it fell back to {result.provider}"
     return RedirectResponse(
-        f"/settings?error={quote(result.error or f'Test fell back to {result.provider}.')}",
+        f"/settings?notice_bad=1&notice={quote(f'Settings saved, but the test did not send: {detail}')}",
         status_code=303,
     )

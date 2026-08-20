@@ -8,8 +8,10 @@ any credentials are set.
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import smtplib
+import socket
 import ssl
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
@@ -86,6 +88,36 @@ class TelegramProvider(NotificationProvider):
         return SendResult(True, self.name)
 
 
+class _IPv4OnlySMTP(smtplib.SMTP):
+    """SMTP restricted to IPv4.
+
+    Mail servers publish AAAA records, and a container without an IPv6 route
+    fails with ENETUNREACH against the first address returned -- sometimes
+    before IPv4 is ever reached. Retrying over IPv4 alone distinguishes "no
+    IPv6 here" from "this host cannot send mail at all".
+    """
+
+    def _get_socket(self, host, port, timeout):  # pragma: no cover - network
+        last: OSError | None = None
+        for family, socktype, proto, _canon, addr in socket.getaddrinfo(
+            host, port, socket.AF_INET, socket.SOCK_STREAM
+        ):
+            try:
+                sock = socket.socket(family, socktype, proto)
+                sock.settimeout(timeout)
+                sock.connect(addr)
+                return sock
+            except OSError as exc:
+                last = exc
+        raise last or OSError(f"no IPv4 address for {host}")
+
+
+#: Errors that mean "the network refused to carry this", not "bad credentials".
+UNREACHABLE_ERRNOS: frozenset[int] = frozenset(
+    {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.ENETDOWN}
+)
+
+
 class EmailProvider(NotificationProvider):
     """Sends the digest as a multipart HTML email over SMTP.
 
@@ -134,8 +166,7 @@ class EmailProvider(NotificationProvider):
             mail.add_alternative(message.html, subtype="html")
         return mail
 
-    def _send_sync(self, mail: EmailMessage) -> None:
-        """Blocking SMTP conversation, run off the event loop by :meth:`send`."""
+    def _deliver(self, mail: EmailMessage, smtp_class) -> None:
         context = ssl.create_default_context()
         timeout = 30
         # Port 465 is implicit TLS; everything else negotiates STARTTLS.
@@ -146,7 +177,7 @@ class EmailProvider(NotificationProvider):
                 server.send_message(mail)
             return
 
-        with smtplib.SMTP(self.host, self.port, timeout=timeout) as server:
+        with smtp_class(self.host, self.port, timeout=timeout) as server:
             server.ehlo()
             if self.starttls:
                 server.starttls(context=context)
@@ -154,6 +185,16 @@ class EmailProvider(NotificationProvider):
             if self.user:
                 server.login(self.user, self.password or "")
             server.send_message(mail)
+
+    def _send_sync(self, mail: EmailMessage) -> None:
+        """Blocking SMTP conversation, run off the event loop by :meth:`send`."""
+        try:
+            self._deliver(mail, smtplib.SMTP)
+        except OSError as exc:
+            if exc.errno not in UNREACHABLE_ERRNOS or self.port == 465:
+                raise
+            log.info("notify.email_retry_ipv4", host=self.host)
+            self._deliver(mail, _IPv4OnlySMTP)
 
     async def send(self, message: NotificationMessage) -> SendResult:
         if not self.is_configured():
@@ -170,7 +211,22 @@ class EmailProvider(NotificationProvider):
                 self.name,
                 error=f"SMTP auth rejected ({exc.smtp_code}); an app password is usually required",
             )
-        except (smtplib.SMTPException, OSError) as exc:
+        except OSError as exc:
+            if exc.errno in UNREACHABLE_ERRNOS:
+                # Worth naming precisely: the credentials are probably fine and
+                # the scheduled run may well be sending digests happily.
+                return SendResult(
+                    False,
+                    self.name,
+                    error=(
+                        f"Cannot reach {self.host}:{self.port} from this host "
+                        "(network unreachable). Many free hosting tiers block "
+                        "outbound SMTP; the scheduled search sends from "
+                        "elsewhere and is unaffected."
+                    ),
+                )
+            return SendResult(False, self.name, error=f"{type(exc).__name__}: {exc}")
+        except smtplib.SMTPException as exc:
             return SendResult(False, self.name, error=f"{type(exc).__name__}: {exc}")
 
         return SendResult(True, self.name, detail=f"sent to {len(self.recipients)} recipient(s)")

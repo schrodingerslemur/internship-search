@@ -6,6 +6,7 @@
 
 {% if saved %}<div class="note">Settings saved.</div>{% endif %}
 {% if error %}<div class="note bad">Could not save: {{ error }}</div>{% endif %}
+{% if notice %}<div class="note {{ 'warn' if notice_bad else '' }}">{{ notice }}</div>{% endif %}
 
 <form method="post" action="/settings">
 

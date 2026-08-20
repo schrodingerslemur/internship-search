@@ -527,3 +527,53 @@ class TestAppliedJobsStopAlerting:
 
         selection = select_jobs_for_digest(session, rules, now=NOW)
         assert job.id in [j.id for j in selection.jobs]
+
+
+class TestUnreachableNetwork:
+    """A host that blocks outbound SMTP must not look like a bad password."""
+
+    async def test_unreachable_names_the_host_and_the_likely_cause(self, monkeypatch):
+        import errno
+
+        from app.notify.providers import EmailProvider
+
+        def unreachable(self, mail):
+            raise OSError(errno.ENETUNREACH, "Network is unreachable")
+
+        monkeypatch.setattr(EmailProvider, "_send_sync", unreachable)
+        result = await configured_email_provider().send(NotificationMessage(text="hi"))
+
+        assert result.ok is False
+        assert "smtp.example.com:587" in result.error
+        assert "block outbound SMTP" in result.error
+        # And it must not be mistaken for an auth failure.
+        assert "password" not in result.error.lower()
+
+    async def test_other_os_errors_are_still_reported_plainly(self, monkeypatch):
+        from app.notify.providers import EmailProvider
+
+        def refused(self, mail):
+            raise OSError(111, "Connection refused")
+
+        monkeypatch.setattr(EmailProvider, "_send_sync", refused)
+        result = await configured_email_provider().send(NotificationMessage(text="hi"))
+        assert "Connection refused" in result.error
+
+    async def test_an_ipv6_only_failure_retries_over_ipv4(self, monkeypatch):
+        """The retry is what distinguishes 'no IPv6 route' from 'no egress'."""
+        import errno
+
+        from app.notify.providers import EmailProvider, _IPv4OnlySMTP
+
+        attempts = []
+
+        def deliver(self, mail, smtp_class):
+            attempts.append(smtp_class)
+            if smtp_class is not _IPv4OnlySMTP:
+                raise OSError(errno.ENETUNREACH, "Network is unreachable")
+
+        monkeypatch.setattr(EmailProvider, "_deliver", deliver)
+        result = await configured_email_provider().send(NotificationMessage(text="hi"))
+
+        assert result.ok, "an IPv4-reachable server should still be delivered to"
+        assert attempts[-1] is _IPv4OnlySMTP
