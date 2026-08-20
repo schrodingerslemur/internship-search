@@ -1,53 +1,97 @@
 {% extends "base.html" %}
 {% set hide_nav = true %}
-{% block title %}{{ "Sign in" if mode == "login" else "Create account" }} · Internship Search{% endblock %}
+{% set titles = {
+  "login": "Sign in",
+  "signup": "Create your account",
+  "forgot": "Reset your password",
+  "reset": "Choose a new password",
+} %}
+{% block title %}{{ titles.get(mode, "Sign in") }} · Internship Search{% endblock %}
 
 {% block content %}
 <div class="auth-wrap">
   <div class="auth-card">
     <div class="auth-brand">🚀 Internship Search</div>
-    <h1 class="auth-title">{{ "Sign in" if mode == "login" else "Create your account" }}</h1>
+    <h1 class="auth-title">{{ titles.get(mode, "Sign in") }}</h1>
+
     <p class="auth-sub">
       {% if mode == "login" %}
         Your jobs, your tracker, your digests.
-      {% else %}
-        Your own preferences and email digest. The job search itself is shared,
-        so you see everything found — but your decisions stay yours.
+      {% elif mode == "signup" %}
+        Your own preferences and email digest. The search itself is shared, so
+        you see everything found — but your decisions stay yours.
+      {% elif mode == "forgot" %}
+        Enter the email you sign in with and we'll send a link.
+      {% elif mode == "reset" %}
+        Pick something at least 8 characters long.
       {% endif %}
     </p>
 
     {% if error %}<div class="auth-error">{{ error }}</div>{% endif %}
+    {% if notice %}<div class="auth-notice">{{ notice }}</div>{% endif %}
 
-    <form method="post" action="{{ '/login' if mode == 'login' else '/signup' }}" class="auth-form">
-      {% if mode == "signup" %}
-      <label>
-        <span>Name</span>
-        <input type="text" name="name" value="{{ name or '' }}" autocomplete="name" placeholder="Optional">
-      </label>
-      {% endif %}
-      <label>
-        <span>Email</span>
-        <input type="email" name="email" value="{{ email or '' }}" required autofocus
-               autocomplete="username" placeholder="you@example.com">
-      </label>
-      <label>
-        <span>Password</span>
-        <input type="password" name="password" required
-               autocomplete="{{ 'current-password' if mode == 'login' else 'new-password' }}"
-               placeholder="{{ 'At least 8 characters' if mode == 'signup' else '' }}">
-      </label>
-      <button class="btn primary" type="submit">
-        {{ "Sign in" if mode == "login" else "Create account" }}
-      </button>
-    </form>
+    {% if mode == "forgot" and notice %}
+      {# Sent: don't invite a second submission of the same form. #}
+      <div class="auth-alt"><a href="/login">Back to sign in</a></div>
+    {% else %}
+      <form method="post"
+            action="{% if mode == 'signup' %}/signup
+                    {%- elif mode == 'forgot' %}/forgot
+                    {%- elif mode == 'reset' %}/reset/{{ token }}
+                    {%- else %}/login{% endif %}"
+            class="auth-form">
 
-    <div class="auth-alt">
-      {% if mode == "login" %}
-        No account yet? <a href="/signup">Create one</a>
-      {% else %}
-        Already have one? <a href="/login">Sign in</a>
-      {% endif %}
-    </div>
+        {% if mode == "signup" %}
+        <label>
+          <span>Name</span>
+          <input type="text" name="name" value="{{ name or '' }}" autocomplete="name"
+                 placeholder="Optional">
+        </label>
+        {% endif %}
+
+        {% if mode != "reset" %}
+        <label>
+          <span>Email</span>
+          <input type="email" name="email" value="{{ email or '' }}" required autofocus
+                 autocomplete="username" placeholder="you@example.com">
+        </label>
+        {% endif %}
+
+        {% if mode == "reset" %}
+        <label>
+          <span>New password</span>
+          <input type="password" name="password" required autofocus
+                 autocomplete="new-password" placeholder="At least 8 characters">
+        </label>
+        {% elif mode != "forgot" %}
+        <label>
+          <span>Password</span>
+          <input type="password" name="password" required
+                 autocomplete="{{ 'current-password' if mode == 'login' else 'new-password' }}"
+                 placeholder="{{ 'At least 8 characters' if mode == 'signup' else '' }}">
+        </label>
+        {% endif %}
+
+        <button class="btn primary" type="submit">
+          {% if mode == "signup" %}Create account
+          {%- elif mode == "forgot" %}Send reset link
+          {%- elif mode == "reset" %}Set new password
+          {%- else %}Sign in{% endif %}
+        </button>
+      </form>
+
+      <div class="auth-alt">
+        {% if mode == "login" %}
+          <a href="/forgot">Forgot your password?</a>
+          <span class="dot">·</span>
+          <a href="/signup">Create an account</a>
+        {% elif mode == "signup" %}
+          Already have one? <a href="/login">Sign in</a>
+        {% else %}
+          <a href="/login">Back to sign in</a>
+        {% endif %}
+      </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

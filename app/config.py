@@ -126,6 +126,17 @@ class Settings(BaseSettings):
         return self.email_from or self.smtp_user
 
     @property
+    def smtp_configured(self) -> bool:
+        """Whether this deployment can send mail at all.
+
+        Deliberately independent of any particular recipient: the
+        forgot-password page must answer identically for an address that has
+        an account and one that does not, so it cannot be used to find out
+        who has one.
+        """
+        return bool(self.smtp_host and self.smtp_password and self.email_sender)
+
+    @property
     def email_available(self) -> bool:
         return bool(self.smtp_host and self.smtp_password and self.email_sender and self.email_to)
 

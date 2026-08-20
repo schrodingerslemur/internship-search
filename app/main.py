@@ -77,11 +77,16 @@ def _load_signing_key() -> bytes:
 
 #: Reachable without a session: the platform health check runs unauthenticated,
 #: and the sign-in pages obviously cannot require being signed in.
-_PUBLIC_PATHS: frozenset[str] = frozenset({"/health", "/login", "/signup", "/logout"})
+_PUBLIC_PATHS: frozenset[str] = frozenset(
+    {"/health", "/login", "/signup", "/logout", "/forgot"}
+)
 #: ``/a/`` carries its own signed, single-purpose authority -- see
 #: app/services/action_tokens.py. It is deliberately usable from a phone that
 #: has never signed in, which is the entire point of one-click triage.
-_PUBLIC_PREFIXES: tuple[str, ...] = ("/static/", "/a/")
+#: ``/reset/`` carries a single-use token tied to the current password hash --
+#: see app/services/password_reset.py. Someone who has forgotten their password
+#: obviously cannot sign in to use it.
+_PUBLIC_PREFIXES: tuple[str, ...] = ("/static/", "/a/", "/reset/")
 
 
 def _is_public(path: str) -> bool:

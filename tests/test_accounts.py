@@ -681,3 +681,198 @@ class TestSetPasswordCommand:
         same = auth.authenticate(session, "keep@example.com", "a-new-password")
         assert same.id == user_id
         assert user_jobs.status_of(user_jobs.get_state(session, same, a_job)) == "applied"
+
+
+class TestForgotPassword:
+    """A reset link must be single-use, short-lived, and reveal nothing."""
+
+    def _user(self, session, email="forgot@example.com"):
+        return auth.create_account(session, email=email, password="original-password")
+
+    def test_round_trip(self, session):
+        from app.services import password_reset
+
+        user = self._user(session)
+        token = password_reset.issue(user, b"key")
+        assert password_reset.verify(session, token, b"key").id == user.id
+
+    def test_using_it_retires_it(self, session):
+        """The hash is part of the signing key, so a reset invalidates the link."""
+        from app.services import password_reset
+
+        user = self._user(session)
+        token = password_reset.issue(user, b"key")
+
+        user.password_hash = auth.hash_password("the-new-password")
+        session.flush()
+
+        assert password_reset.verify(session, token, b"key") is None
+
+    def test_an_older_outstanding_link_is_retired_too(self, session):
+        """Requesting twice then resetting must not leave the first link live."""
+        from app.services import password_reset
+
+        user = self._user(session)
+        first = password_reset.issue(user, b"key")
+        second = password_reset.issue(user, b"key")
+
+        user.password_hash = auth.hash_password("changed-by-second-link")
+        session.flush()
+
+        assert password_reset.verify(session, first, b"key") is None
+        assert password_reset.verify(session, second, b"key") is None
+
+    def test_expired_links_are_refused(self, session):
+        import time
+
+        from app.services import password_reset
+
+        user = self._user(session)
+        stale = password_reset.issue(
+            user, b"key", now=time.time() - password_reset.RESET_MAX_AGE - 5
+        )
+        assert password_reset.verify(session, stale, b"key") is None
+
+    def test_a_link_for_one_account_cannot_reset_another(self, session):
+        from app.services import password_reset
+
+        victim = self._user(session, "victim@example.com")
+        attacker = self._user(session, "attacker@example.com")
+
+        token = password_reset.issue(attacker, b"key")
+        resolved = password_reset.verify(session, token, b"key")
+        assert resolved.id == attacker.id != victim.id
+
+    @pytest.mark.parametrize("token", ["", "junk", "a.b", "no-dot"])
+    def test_mangled_links_fail_politely(self, session, token):
+        from app.services import password_reset
+
+        assert password_reset.verify(session, token, b"key") is None
+
+    def test_the_form_never_reveals_whether_an_account_exists(self, client, session):
+        """Known and unknown addresses must be indistinguishable.
+
+        Including when mail is unconfigured: an early return that fired only
+        for real accounts would leak exactly what the generic message hides.
+        """
+        self._user(session, "real@example.com")
+
+        known = client.post("/forgot", data={"email": "real@example.com"})
+        unknown = client.post("/forgot", data={"email": "nobody@example.com"})
+
+        assert known.status_code == unknown.status_code
+        assert known.text == unknown.text
+
+    def test_with_mail_configured_both_report_the_link_as_sent(
+        self, client, session, monkeypatch
+    ):
+        import app.web.routes.accounts as accounts_routes
+        from app.notify.base import SendResult
+
+        sent: list[str] = []
+
+        class FakeProvider:
+            def __init__(self, recipient=None):
+                self.recipient = recipient
+
+            def is_configured(self):
+                return True
+
+            async def send(self, message):
+                sent.append(self.recipient)
+                return SendResult(True, "email")
+
+        settings = accounts_routes.get_settings()
+        monkeypatch.setattr(type(settings), "smtp_configured", property(lambda self: True))
+        monkeypatch.setattr("app.notify.providers.EmailProvider", FakeProvider)
+
+        self._user(session, "real@example.com")
+        known = client.post("/forgot", data={"email": "real@example.com"})
+        unknown = client.post("/forgot", data={"email": "nobody@example.com"})
+
+        assert "a reset link is on its way" in known.text
+        assert known.text == unknown.text
+        # Sent only to the real account, and only to its login address.
+        assert sent == ["real@example.com"]
+
+    def test_forgot_is_reachable_signed_out(self, client):
+        assert client.get("/forgot").status_code == 200
+
+    def test_reset_page_is_reachable_signed_out(self, client, session):
+        from app.services import password_reset
+
+        user = self._user(session)
+        token = password_reset.issue(user, client.app.state.signing_key)
+        response = client.get(f"/reset/{token}")
+        assert response.status_code == 200
+        assert "New password" in response.text
+
+    def test_an_expired_reset_page_explains_itself(self, client):
+        response = client.get("/reset/not-a-real-token")
+        assert response.status_code == 400
+        assert "expired or already been used" in response.text
+
+    def test_completing_a_reset_signs_you_in(self, client, session):
+        from app.services import password_reset
+
+        user = self._user(session)
+        token = password_reset.issue(user, client.app.state.signing_key)
+
+        response = client.post(f"/reset/{token}", data={"password": "a-brand-new-password"})
+        assert response.status_code == 303
+        assert auth.SESSION_COOKIE in response.cookies
+        assert auth.authenticate(session, "forgot@example.com", "a-brand-new-password")
+        assert auth.authenticate(session, "forgot@example.com", "original-password") is None
+
+    def test_a_weak_new_password_is_refused(self, client, session):
+        from app.services import password_reset
+
+        user = self._user(session)
+        token = password_reset.issue(user, client.app.state.signing_key)
+
+        response = client.post(f"/reset/{token}", data={"password": "short"})
+        assert response.status_code == 400
+        assert auth.authenticate(session, "forgot@example.com", "original-password")
+
+
+class TestChangePassword:
+    def _signed_in(self, client, session, password="original-password"):
+        auth.create_account(session, email="change@example.com", password=password)
+        session.flush()
+        client.post("/login", data={"email": "change@example.com", "password": password})
+
+    def test_changing_with_the_correct_current_password(self, client, session):
+        self._signed_in(client, session)
+        response = client.post(
+            "/settings/password",
+            data={"current_password": "original-password", "new_password": "a-fresh-password"},
+        )
+        assert response.status_code == 303
+        assert "password_ok" in response.headers["location"]
+        assert auth.authenticate(session, "change@example.com", "a-fresh-password")
+
+    def test_the_wrong_current_password_changes_nothing(self, client, session):
+        self._signed_in(client, session)
+        response = client.post(
+            "/settings/password",
+            data={"current_password": "not-it", "new_password": "a-fresh-password"},
+        )
+        assert "password_error" in response.headers["location"]
+        assert auth.authenticate(session, "change@example.com", "original-password")
+
+    def test_a_weak_new_password_is_refused(self, client, session):
+        self._signed_in(client, session)
+        response = client.post(
+            "/settings/password",
+            data={"current_password": "original-password", "new_password": "short"},
+        )
+        assert "password_error" in response.headers["location"]
+        assert auth.authenticate(session, "change@example.com", "original-password")
+
+    def test_signed_out_users_are_sent_to_login(self, client):
+        response = client.post(
+            "/settings/password",
+            data={"current_password": "x", "new_password": "a-good-password"},
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/login"
