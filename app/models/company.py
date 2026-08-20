@@ -72,7 +72,7 @@ class AtsBoard(Base, TimestampMixin):
     #: greenhouse | lever | ashby | smartrecruiters | workable | workday | icims ...
     provider: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     #: The board identifier within that provider (e.g. greenhouse board token).
-    board_token: Mapped[str] = mapped_column(String(200), nullable=False)
+    board_token: Mapped[str] = mapped_column(String(400), nullable=False)
     #: Provider-specific extras, e.g. Workday {"host": "nvidia.wd5...", "site": "..."}.
     extra: Mapped[dict] = mapped_column(JSON, default=dict)
 

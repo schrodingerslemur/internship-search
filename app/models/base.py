@@ -5,8 +5,8 @@ from __future__ import annotations
 import enum
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, MetaData
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import DateTime, MetaData, String, event
+from sqlalchemy.orm import DeclarativeBase, Mapped, Mapper, mapped_column
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -23,6 +23,74 @@ def utcnow() -> datetime:
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
+
+
+# --------------------------------------------------------------------------
+# Oversized-value guard
+#
+# SQLite ignores VARCHAR(n) limits; PostgreSQL enforces them. A job title or
+# location longer than its column therefore passes every local test and then
+# aborts an entire production run -- and because the whole batch is one flush,
+# a single freak listing loses every other job found that day.
+#
+# Free text is clamped to fit. Identity values are NOT: truncating two distinct
+# requisition ids down to a shared prefix would make the deduplicator treat
+# different openings as the same job, which is the one thing it must never do.
+# Those columns are given generous lengths in the schema instead.
+# --------------------------------------------------------------------------
+
+#: Never truncated -- equality on these decides whether two listings are one job.
+IDENTITY_COLUMNS: frozenset[str] = frozenset(
+    {
+        "ats_identity",
+        "board_token",
+        "canonical_job_id",
+        "canonical_url",
+        "canonical_url_hash",
+        "content_hash",
+        "fingerprint",
+        "left_key",
+        "requisition_id",
+        "right_key",
+        "slug",
+        "source_job_id",
+    }
+)
+
+#: mapper -> ((attribute, limit), ...), computed once per mapper.
+_CLAMPABLE: dict[Mapper, tuple[tuple[str, int], ...]] = {}
+
+
+def _clampable_columns(mapper: Mapper) -> tuple[tuple[str, int], ...]:
+    cached = _CLAMPABLE.get(mapper)
+    if cached is not None:
+        return cached
+
+    found = []
+    for prop in mapper.column_attrs:
+        column = prop.columns[0]
+        if column.key in IDENTITY_COLUMNS or column.name in IDENTITY_COLUMNS:
+            continue
+        if isinstance(column.type, String) and column.type.length:
+            found.append((prop.key, column.type.length))
+    result = tuple(found)
+    _CLAMPABLE[mapper] = result
+    return result
+
+
+def _clamp_oversized_strings(mapper: Mapper, _connection, target) -> None:
+    for attribute, limit in _clampable_columns(mapper):
+        value = getattr(target, attribute, None)
+        if isinstance(value, str) and len(value) > limit:
+            # Ellipsis rather than a hard cut, so a truncated value is
+            # visibly truncated in the dashboard rather than silently wrong.
+            setattr(target, attribute, value[: limit - 1] + "…")
+
+
+# Listening on the Mapper class itself covers every mapped class, including
+# ones defined later; `propagate` is only meaningful for a single-class target.
+event.listen(Mapper, "before_insert", _clamp_oversized_strings)
+event.listen(Mapper, "before_update", _clamp_oversized_strings)
 
 
 class TimestampMixin:

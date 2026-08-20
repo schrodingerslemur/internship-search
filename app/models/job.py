@@ -53,7 +53,7 @@ class Job(Base, TimestampMixin):
     #: Deterministic dedup fingerprint (company, title, location, employment type).
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     #: Strongest dedup key when present, e.g. greenhouse:acme:12345
-    ats_identity: Mapped[str | None] = mapped_column(String(300), index=True)
+    ats_identity: Mapped[str | None] = mapped_column(String(500), index=True)
 
     company_id: Mapped[int | None] = mapped_column(
         ForeignKey("companies.id", ondelete="SET NULL"), index=True
@@ -100,7 +100,9 @@ class Job(Base, TimestampMixin):
     #: Internship terms mentioned, e.g. Summer 2026.
     terms: Mapped[list] = mapped_column(JSON, default=list)
     skills: Mapped[list] = mapped_column(JSON, default=list)
-    requisition_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    # Workday uses the full job slug as its requisition id, which routinely runs
+    # past 120 characters. Never truncated -- see IDENTITY_COLUMNS.
+    requisition_id: Mapped[str | None] = mapped_column(String(500), index=True)
 
     # ---- Scoring and triage ----
     relevance_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
@@ -156,12 +158,12 @@ class JobListing(Base, TimestampMixin):
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
     source: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     source_kind: Mapped[str] = mapped_column(String(40), default="unknown")
-    source_job_id: Mapped[str] = mapped_column(String(300), nullable=False)
+    source_job_id: Mapped[str] = mapped_column(String(500), nullable=False)
     url: Mapped[str | None] = mapped_column(String(1000))
     canonical_url: Mapped[str | None] = mapped_column(String(1000))
     canonical_url_hash: Mapped[str | None] = mapped_column(String(64))
     apply_url: Mapped[str | None] = mapped_column(String(1000))
-    ats_identity: Mapped[str | None] = mapped_column(String(300), index=True)
+    ats_identity: Mapped[str | None] = mapped_column(String(500), index=True)
 
     title_raw: Mapped[str | None] = mapped_column(String(500))
     company_raw: Mapped[str | None] = mapped_column(String(300))
@@ -204,8 +206,8 @@ class DedupDecision(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     run_id: Mapped[int | None] = mapped_column(Integer, index=True)
-    left_key: Mapped[str] = mapped_column(String(300), nullable=False)
-    right_key: Mapped[str] = mapped_column(String(300), nullable=False)
+    left_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    right_key: Mapped[str] = mapped_column(String(500), nullable=False)
     stage: Mapped[str] = mapped_column(String(40), nullable=False)
     #: same, different, or uncertain
     verdict: Mapped[str] = mapped_column(String(20), nullable=False)

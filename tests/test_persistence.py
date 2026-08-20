@@ -250,3 +250,119 @@ class TestDiscovery:
         raws = [make_raw(company="NVIDIA", source_job_id="1")]
         discovery.register_companies(session, raws, preferred={"nvidia"}, blacklisted=set())
         assert session.query(Company).one().is_preferred is True
+
+
+class TestOversizedValues:
+    """SQLite ignores VARCHAR limits; PostgreSQL enforces them.
+
+    These tests assert the guard directly rather than relying on the database,
+    so they catch the overflow on SQLite too -- which is the whole point, since
+    the bug they cover reached production precisely because SQLite stayed quiet.
+    """
+
+    #: The real value that aborted the first production run.
+    WORKDAY_SLUG = (
+        "Stagiaire-associ-e---analyste-des-systmes-d-affaires---Automne-2026---"
+        "Associate-Business-Systems-Analyst-Intern---Fall-2026_JR0150830"
+    )
+
+    def _column_length(self, model, name: str) -> int:
+        return model.__table__.columns[name].type.length
+
+    def test_the_workday_slug_that_broke_production_now_fits(self, session):
+        from app.models import Job
+
+        assert len(self.WORKDAY_SLUG) > 120, "fixture no longer reproduces the overflow"
+        assert self._column_length(Job, "requisition_id") >= len(self.WORKDAY_SLUG)
+
+    def test_identity_values_are_never_truncated(self, session):
+        """Truncation here would merge two distinct openings -- the cardinal sin."""
+        from app.models import Job
+
+        job = Job(
+            canonical_job_id="cid-req",
+            fingerprint="fp",
+            company_name="McKesson",
+            title="Associate Business Systems Analyst Intern",
+            application_url="https://example.com/1",
+            requisition_id=self.WORKDAY_SLUG,
+        )
+        session.add(job)
+        session.flush()
+        assert job.requisition_id == self.WORKDAY_SLUG
+
+    def test_two_slugs_sharing_a_long_prefix_stay_distinct(self, session):
+        """The exact over-merge that truncating requisition ids would cause."""
+        from app.models import Job
+
+        base = "Associate-Business-Systems-Analyst-Intern-Fall-2026" * 3
+        first, second = f"{base}_JR0150830", f"{base}_JR0150831"
+        assert first[:120] == second[:120], "fixture must share a >120 char prefix"
+
+        for i, req in enumerate((first, second)):
+            session.add(
+                Job(
+                    canonical_job_id=f"cid-{i}",
+                    fingerprint=f"fp-{i}",
+                    company_name="McKesson",
+                    title="Analyst Intern",
+                    application_url=f"https://example.com/{i}",
+                    requisition_id=req,
+                )
+            )
+        session.flush()
+
+        stored = {j.requisition_id for j in session.query(Job).all()}
+        assert stored == {first, second}
+
+    def test_overlong_free_text_is_clamped_to_fit(self, session):
+        """A freak listing must not abort the flush that carries every other job."""
+        from app.models import Job
+
+        limit = self._column_length(Job, "location_raw")
+        job = Job(
+            canonical_job_id="cid-loc",
+            fingerprint="fp-loc",
+            company_name="Acme",
+            title="Intern",
+            application_url="https://example.com/x",
+            location_raw="Montreal, QC, Canada; " * 100,
+        )
+        session.add(job)
+        session.flush()
+
+        assert len(job.location_raw) == limit
+        assert job.location_raw.endswith("…")
+
+    def test_values_within_the_limit_are_left_alone(self, session):
+        from app.models import Job
+
+        job = Job(
+            canonical_job_id="cid-ok",
+            fingerprint="fp-ok",
+            company_name="Acme",
+            title="FPGA Intern",
+            application_url="https://example.com/ok",
+            location_raw="Santa Clara, CA",
+        )
+        session.add(job)
+        session.flush()
+        assert job.location_raw == "Santa Clara, CA"
+
+    def test_clamping_applies_on_update_too(self, session):
+        from app.models import Job
+
+        job = Job(
+            canonical_job_id="cid-upd",
+            fingerprint="fp-upd",
+            company_name="Acme",
+            title="Intern",
+            application_url="https://example.com/u",
+            location_raw="Austin, TX",
+        )
+        session.add(job)
+        session.flush()
+
+        job.location_raw = "x" * 5000
+        session.flush()
+        assert len(job.location_raw) == self._column_length(Job, "location_raw")
