@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.logging_setup import get_logger
 from app.models import User
-from app.models.base import KANBAN_ORDER, JobStatus
+from app.models.base import JobStatus
 from app.services import jobs_query as q
 from app.services import user_jobs
 from app.services.actions import add_note, get_job, set_status, update_application_fields
@@ -25,46 +25,134 @@ log = get_logger("pages")
 router = APIRouter()
 
 
+#: Everything the four job pages need in common. `active_view` names the page;
+#: `view` is the per-user data for the jobs on it. They are deliberately
+#: different words -- conflating them is how a card ends up showing someone
+#: else's status.
+def _job_page_context(request: Request, db: Session, user: User, view_name: str) -> dict:
+    params = dict(request.query_params)
+    params["view"] = view_name
+    filters = q.JobFilters.from_query(params)
+    page = q.search_jobs(db, filters, user)
+    return {
+        "active_view": view_name,
+        "counts": q.dashboard_counts(db, user),
+        "page": page,
+        "view": user_jobs.view_for(db, user, page.jobs),
+        "filters": filters,
+        "facets": q.facet_values(db),
+        "runs": q.recent_runs(db, limit=1),
+        "next_search_at": _next_search_at(request),
+        "flash": _flash(request),
+    }
+
+
+def _next_search_at(request: Request):
+    from app.scheduler import next_digest_at
+
+    return next_digest_at(getattr(request.app.state, "scheduler", None))
+
+
+def _with_flash(path: str, message: str, *, bad: bool = False) -> str:
+    """Attach a confirmation to a redirect target, preserving its query string."""
+    joiner = "&" if "?" in path else "?"
+    suffix = f"{joiner}done={quote(message)}" + ("&bad=1" if bad else "")
+    return f"{path}{suffix}"
+
+
+def _visible_total(db: Session, user: User, view: str, back: str) -> int | None:
+    """How many jobs the list the user is looking at now holds.
+
+    The filters have to come from the page they acted on -- counting an
+    unfiltered list would replace one wrong number with another. They travel in
+    the redirect target, which already carries the exact query string.
+    """
+    from urllib.parse import parse_qsl, urlparse
+
+    if view not in q.VIEWS:
+        return None
+    params = dict(parse_qsl(urlparse(back or "").query))
+    params["view"] = view
+    return q.count_jobs(db, q.JobFilters.from_query(params), user)
+
+
+def _flash(request: Request) -> dict | None:
+    """A one-line confirmation carried across a redirect."""
+    text = request.query_params.get("done")
+    if not text:
+        return None
+    return {"text": text, "bad": request.query_params.get("bad") == "1"}
+
+
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)) -> HTMLResponse:
-    filters = q.JobFilters.from_query(dict(request.query_params))
-    page = q.search_jobs(db, filters, user)
+    """The feed: everything still awaiting a decision."""
     return templates.TemplateResponse(
-        request,
-        "dashboard.html",
-        {
-            "counts": q.dashboard_counts(db, user),
-            "page": page,
-            "view": user_jobs.view_for(db, user, page.jobs),
-            "filters": filters,
-            "facets": q.facet_values(db),
-            "runs": q.recent_runs(db, limit=1),
-        },
+        request, "dashboard.html", _job_page_context(request, db, user, "review")
+    )
+
+
+@router.get("/saved", response_class=HTMLResponse)
+def saved_jobs(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "dashboard.html", _job_page_context(request, db, user, "saved")
+    )
+
+
+@router.get("/applied", response_class=HTMLResponse)
+def applied_jobs(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "dashboard.html", _job_page_context(request, db, user, "applied")
+    )
+
+
+@router.get("/dismissed", response_class=HTMLResponse)
+def dismissed_jobs(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "dashboard.html", _job_page_context(request, db, user, "dismissed")
     )
 
 
 @router.get("/jobs", response_class=HTMLResponse)
 def job_list(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)) -> HTMLResponse:
-    """HTMX partial: just the results table."""
+    """HTMX partial: just the results list."""
     filters = q.JobFilters.from_query(dict(request.query_params))
     page = q.search_jobs(db, filters, user)
     return templates.TemplateResponse(
         request,
         "partials/job_list.html",
-        {"page": page, "filters": filters, "view": user_jobs.view_for(db, user, page.jobs)},
+        {
+            "page": page,
+            "filters": filters,
+            "view": user_jobs.view_for(db, user, page.jobs),
+            "active_view": filters.view,
+        },
     )
 
 
 @router.get("/job/{job_id}", response_class=HTMLResponse)
-def job_detail(job_id: str, request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def job_detail(
+    job_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+) -> HTMLResponse:
     job = get_job(db, job_id)
     if job is None:
-        return HTMLResponse("<h1>Job not found</h1>", status_code=404)
+        return templates.TemplateResponse(
+            request, "not_found.html", {}, status_code=404
+        )
     from sqlalchemy import select
 
     from app.models import Application, JobEvent
 
-    application = db.scalar(select(Application).where(Application.job_id == job.id))
+    # Scoped to the signed-in account: an application is one person's record,
+    # and showing somebody else's would be both wrong and a disclosure.
+    application = db.scalar(
+        select(Application).where(
+            Application.job_id == job.id, Application.user_id == user.id
+        )
+    )
     events = list(
         db.scalars(
             select(JobEvent).where(JobEvent.job_id == job.id).order_by(JobEvent.created_at.desc())
@@ -77,10 +165,42 @@ def job_detail(job_id: str, request: Request, db: Session = Depends(get_db)) -> 
             "job": job,
             "application": application,
             "events": events,
-            "assistant": application_assistant(db, job),
+            "assistant": application_assistant(db, job, user),
             "statuses": list(JobStatus),
+            "view": user_jobs.view_for(db, user, [job]),
+            "active_view": "review",
+            "flash": _flash(request),
         },
     )
+
+
+#: What each decision is called back to the user, in the past tense. Undo is
+#: offered for every one of them, which is why none asks for confirmation first.
+#: The tracker is about what happens *after* you apply. New and Saved have
+#: their own pages, and repeating them here only made the board too wide to read
+#: and left two places showing the same job.
+PIPELINE_COLUMNS = (
+    JobStatus.APPLIED,
+    JobStatus.ASSESSMENT,
+    JobStatus.INTERVIEW,
+    JobStatus.OFFER,
+    JobStatus.REJECTED,
+)
+
+
+OUTCOME: dict[str, str] = {
+    JobStatus.SAVED.value: "Saved",
+    JobStatus.APPLIED.value: "Marked as applied",
+    JobStatus.DISMISSED.value: "Dismissed",
+    JobStatus.NEW.value: "Moved back to review",
+    # "Updated" tells the user nothing about which stage they just moved to,
+    # which on a five-column board is the only thing they wanted confirmed.
+    JobStatus.ASSESSMENT.value: "Moved to Assessment",
+    JobStatus.INTERVIEW.value: "Moved to Interview",
+    JobStatus.OFFER.value: "Moved to Offer",
+    JobStatus.REJECTED.value: "Marked as rejected",
+    JobStatus.EXPIRED.value: "Marked as expired",
+}
 
 
 @router.post("/job/{job_id}/status")
@@ -89,32 +209,139 @@ def job_status(
     request: Request,
     status: str = Form(...),
     redirect_to: str = Form("/"),
+    view: str = Form("review"),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
+    """Record a decision, and say plainly what happened.
+
+    Every response answers three questions at once: what the job's state is now,
+    whether it still belongs on this page, and how to take it back.
+    """
     job = get_job(db, job_id)
     if job is None:
-        return HTMLResponse("Job not found", status_code=404)
+        return HTMLResponse("That job no longer exists.", status_code=404)
     try:
         new_status = JobStatus(status)
     except ValueError:
         return HTMLResponse("Invalid status", status_code=400)
 
+    previous = user_jobs.status_of(user_jobs.get_state(db, user, job))
     set_status(db, job, new_status, user)
     db.commit()
 
-    # HTMX inline actions swap just the card's action bar.
-    if request.headers.get("HX-Request"):
+    message = OUTCOME.get(status, "Updated")
+
+    if request.headers.get("HX-Request") and view == "tracker":
+        # The board is re-rendered whole rather than the card being spliced
+        # from one column into another. It costs one extra query and removes an
+        # entire class of bug -- a card in the right column over a stale count,
+        # or a count that drifts after a few moves.
         return templates.TemplateResponse(
             request,
-            "partials/job_actions.html",
+            "partials/tracker_result.html",
             {
-                "job": job,
-                "redirect_to": redirect_to,
-                "current_status": user_jobs.status_of(user_jobs.get_state(db, user, job)),
+                "board": q.kanban_board(db, user),
+                "columns": list(PIPELINE_COLUMNS),
+                "counts": q.dashboard_counts(db, user),
+                "toast": {
+                    "text": message,
+                    "job_id": job.id,
+                    "undo_status": previous,
+                    "redirect_to": "/tracker",
+                    "view": "tracker",
+                },
             },
         )
-    return RedirectResponse(redirect_to or "/", status_code=303)
+
+    if request.headers.get("HX-Request"):
+        # A job that has left this page is removed from it rather than left
+        # sitting there greyed out, which is what made "did that work?" a real
+        # question before.
+        stays = status in q.VIEWS.get(view, frozenset({status}))
+        return templates.TemplateResponse(
+            request,
+            "partials/action_result.html",
+            {
+                "job": job,
+                "keep_card": stays,
+                "view": user_jobs.view_for(db, user, [job]),
+                "active_view": view,
+                # Recomputed after the change, so the headline and the four
+                # counters describe the list the user is actually looking at.
+                "counts": q.dashboard_counts(db, user),
+                "total": _visible_total(db, user, view, redirect_to),
+                "filters": q.JobFilters.from_query({"view": view}),
+                "toast": {
+                    "text": message,
+                    "job_id": job.id,
+                    # Undo puts the job back where it actually was, rather than
+                    # assuming everything came from the review feed.
+                    "undo_status": previous,
+                    "redirect_to": redirect_to,
+                    "view": view,
+                },
+            },
+        )
+
+    return RedirectResponse(_with_flash(redirect_to or "/", message), status_code=303)
+
+
+@router.post("/job/{job_id}/opened")
+def job_opened(
+    job_id: str,
+    request: Request,
+    view: str = Form("review"),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """The user opened the application page. That is all this records.
+
+    Opening a posting and submitting an application are different events, and
+    treating a click as an application would fill the Applied list with jobs the
+    user only glanced at. So the status is left alone and the card asks.
+    """
+    job = get_job(db, job_id)
+    if job is None:
+        return HTMLResponse("That job no longer exists.", status_code=404)
+    user_jobs.mark_opened(db, user, job)
+    db.commit()
+    return templates.TemplateResponse(
+        request,
+        "partials/job_actions.html",
+        {
+            "job": job,
+            "current_status": user_jobs.status_of(user_jobs.get_state(db, user, job)),
+            "asking": True,
+            "active_view": view,
+        },
+    )
+
+
+@router.post("/job/{job_id}/not-applied")
+def job_not_applied(
+    job_id: str,
+    request: Request,
+    view: str = Form("review"),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Not yet: clear the pending question and leave the status untouched."""
+    job = get_job(db, job_id)
+    if job is None:
+        return HTMLResponse("That job no longer exists.", status_code=404)
+    state = user_jobs.get_or_create_state(db, user, job)
+    state.opened_at = None
+    db.commit()
+    return templates.TemplateResponse(
+        request,
+        "partials/job_actions.html",
+        {
+            "job": job,
+            "current_status": user_jobs.status_of(state),
+            "active_view": view,
+        },
+    )
 
 
 @router.post("/job/{job_id}/note")
@@ -159,9 +386,12 @@ def job_application(
             "referral": referral,
             "follow_up_at": follow_up_at,
         },
+        user,
     )
     db.commit()
-    return RedirectResponse(f"/job/{job_id}", status_code=303)
+    return RedirectResponse(
+        _with_flash(f"/job/{job_id}", "Application details saved"), status_code=303
+    )
 
 
 @router.get("/tracker", response_class=HTMLResponse)
@@ -171,8 +401,9 @@ def tracker(request: Request, db: Session = Depends(get_db), user: User = Depend
         "tracker.html",
         {
             "board": q.kanban_board(db, user),
-            "columns": list(KANBAN_ORDER) + [JobStatus.REJECTED],
+            "columns": list(PIPELINE_COLUMNS),
             "counts": q.dashboard_counts(db, user),
+            "flash": _flash(request),
         },
     )
 
@@ -437,20 +668,28 @@ async def settings_save(
 
 
 @router.get("/profile", response_class=HTMLResponse)
-def profile_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def profile_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "profile.html",
         {
-            "profile": load_profile(db),
-            "resumes": list_resumes(db),
+            "profile": load_profile(db, user=user),
+            "resumes": list_resumes(db, user),
             "saved": request.query_params.get("saved") == "1",
         },
     )
 
 
 @router.post("/profile")
-async def profile_save(request: Request, db: Session = Depends(get_db)):
+async def profile_save(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
     form = await request.form()
 
     def lines(field: str) -> list[str]:
@@ -459,7 +698,7 @@ async def profile_save(request: Request, db: Session = Depends(get_db)):
     def csv(field: str) -> list[str]:
         return [p.strip() for p in str(form.get(field, "")).split(",") if p.strip()]
 
-    profile = load_profile(db)
+    profile = load_profile(db, user=user)
     data = profile.model_dump()
     for name in ("school", "degree", "major", "minor", "work_authorization",
                  "security_clearance", "research_experience", "summary"):
@@ -489,7 +728,7 @@ async def profile_save(request: Request, db: Session = Depends(get_db)):
 
     from app.schemas.profile import CandidateProfileData
 
-    save_profile(db, CandidateProfileData.model_validate(data))
+    save_profile(db, CandidateProfileData.model_validate(data), user=user)
     db.commit()
     return RedirectResponse("/profile?saved=1", status_code=303)
 
@@ -502,6 +741,7 @@ async def resume_upload(
     make_default: str = Form(""),
     file: UploadFile | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     content = await file.read() if file is not None and file.filename else None
     save_resume(
@@ -511,6 +751,7 @@ async def resume_upload(
         filename=file.filename if file is not None else None,
         content=content,
         make_default=make_default.lower() in ("1", "true", "on"),
+        user=user,
     )
     db.commit()
     return RedirectResponse("/profile?saved=1", status_code=303)
@@ -518,7 +759,12 @@ async def resume_upload(
 
 @router.post("/run-search")
 async def run_search_now(request: Request):
-    """Trigger a search from the UI, in the background."""
+    """Trigger a search from the UI, in the background.
+
+    The crawl takes minutes, so the user is returned to the page they were on
+    with an explanation, rather than being parked on a progress screen. The
+    coverage page is offered for anyone who does want to watch it.
+    """
     from app.pipeline.runner import run_search
 
     async def _run() -> None:
@@ -528,7 +774,20 @@ async def run_search_now(request: Request):
             log.exception("manual_run.failed")
 
     asyncio.create_task(_run())
-    return RedirectResponse("/coverage?started=1", status_code=303)
+
+    back = request.headers.get("referer") or "/"
+    if not back.startswith("/"):
+        from urllib.parse import urlparse
+
+        parsed = urlparse(back)
+        back = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    return RedirectResponse(
+        _with_flash(
+            back or "/",
+            "Searching the job boards now. New matches appear here as they are found.",
+        ),
+        status_code=303,
+    )
 
 
 @router.post("/jobs/bulk")
@@ -541,13 +800,25 @@ async def jobs_bulk(
     form = await request.form()
     status = str(form.get("status", ""))
     job_ids = [int(v) for v in form.getlist("job_ids") if str(v).isdigit()]
+    redirect_to = str(form.get("redirect_to") or "/")
+
+    if not job_ids:
+        return RedirectResponse(
+            _with_flash(redirect_to, "Nothing was selected.", bad=True), status_code=303
+        )
 
     changed = user_jobs.bulk_set_status(db, user, job_ids, status)
     db.commit()
     log.info("pages.bulk_status", user_id=user.id, status=status, changed=changed)
 
-    redirect_to = str(form.get("redirect_to") or "/")
-    return RedirectResponse(redirect_to, status_code=303)
+    if changed:
+        verb = OUTCOME.get(status, "Updated")
+        message = f"{verb}: {changed} job{'' if changed == 1 else 's'}"
+    else:
+        # Every selected job was already in that state. Saying so beats a
+        # silent reload that looks like the button did nothing.
+        message = "Those jobs were already in that state."
+    return RedirectResponse(_with_flash(redirect_to, message), status_code=303)
 
 
 @router.post("/settings/test-channel")

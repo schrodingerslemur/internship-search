@@ -177,3 +177,65 @@ class TestAccountsMigration:
         # is set, which is what the claim flow is for.
         assert bool(active[0]) is True
         assert active[1] is None
+
+
+class TestDismissalTimestamps:
+    """The migration that gave dismissals a date, run over a real legacy database."""
+
+    def test_the_whole_chain_applies(self, legacy_db):
+        with sqlite3.connect(legacy_db) as conn:
+            _insert_user(conn)
+            _insert_job(conn, "c1", "dismissed", True)
+
+        command.upgrade(_alembic_config(legacy_db), "head")
+
+        with sqlite3.connect(legacy_db) as conn:
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(user_job_state)").fetchall()
+            }
+        assert {"dismissed_at", "opened_at"} <= columns
+
+    def test_an_existing_dismissal_is_dated(self, legacy_db):
+        """A dismissal made before the column existed must not be left undated:
+        the Dismissed list orders by it."""
+        with sqlite3.connect(legacy_db) as conn:
+            _insert_user(conn)
+            _insert_job(conn, "c1", "dismissed", True)
+
+        command.upgrade(_alembic_config(legacy_db), "head")
+
+        with sqlite3.connect(legacy_db) as conn:
+            dismissed_at = conn.execute(
+                "SELECT dismissed_at FROM user_job_state WHERE status = 'dismissed'"
+            ).fetchone()
+        assert dismissed_at is not None and dismissed_at[0] is not None
+
+    def test_other_states_are_not_given_a_dismissal_date(self, legacy_db):
+        with sqlite3.connect(legacy_db) as conn:
+            _insert_user(conn)
+            _insert_job(conn, "c1", "applied", True)
+
+        command.upgrade(_alembic_config(legacy_db), "head")
+
+        with sqlite3.connect(legacy_db) as conn:
+            row = conn.execute(
+                "SELECT dismissed_at FROM user_job_state WHERE status = 'applied'"
+            ).fetchone()
+        assert row[0] is None
+
+    def test_the_migration_can_be_rolled_back(self, legacy_db):
+        with sqlite3.connect(legacy_db) as conn:
+            _insert_user(conn)
+            _insert_job(conn, "c1", "dismissed", True)
+
+        config = _alembic_config(legacy_db)
+        command.upgrade(config, "head")
+        command.downgrade(config, "d3e4f5a6b7c8")
+
+        with sqlite3.connect(legacy_db) as conn:
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(user_job_state)").fetchall()
+            }
+        assert "dismissed_at" not in columns

@@ -1,0 +1,47 @@
+{# The one-line answer to "what should I do next?", for whichever list you are
+   on. Swapped on its own after every action, so the number at the top of the
+   page can never disagree with the cards underneath it. #}
+{% set vw = active_view|default('review') %}
+{% if vw == 'review' %}
+  {% if counts.to_review %}
+    <div class="headline">{{ counts.to_review }} job{{ '' if counts.to_review == 1 else 's' }} to review</div>
+    <div class="because">
+      {% if counts.new_since_yesterday %}
+        {{ counts.new_since_yesterday }} found since yesterday{% if counts.saved %} &middot;
+        {{ counts.saved }} you saved for later{% endif %}.
+      {% elif counts.saved %}
+        Nothing new since yesterday &mdash; {{ counts.saved }} saved job{{ '' if counts.saved == 1 else 's' }} still waiting on you.
+      {% else %}
+        Nothing new since yesterday.
+      {% endif %}
+      {% if counts.apply_now %}
+        <strong>{{ counts.apply_now }} worth applying to now.</strong>
+      {% endif %}
+    </div>
+  {% else %}
+    <div class="headline">You're all caught up</div>
+    <div class="because">
+      Every job we've found has been saved, applied to, or dismissed. New
+      matches will appear here as soon as the next search finds them.
+    </div>
+  {% endif %}
+{% elif vw == 'saved' %}
+  <div class="headline">{{ counts.saved }} saved job{{ '' if counts.saved == 1 else 's' }}</div>
+  <div class="because">Kept for later. These stay in your review feed until you apply or dismiss them.</div>
+{% elif vw == 'applied' %}
+  <div class="headline">{{ counts.applied }} application{{ '' if counts.applied == 1 else 's' }}</div>
+  <div class="because">
+    Where you've applied. These never come back to the review feed and are
+    never emailed to you again.
+    {% if counts.interviews or counts.offers %}
+      <strong>{{ counts.interviews }} interview{{ '' if counts.interviews == 1 else 's' }},
+      {{ counts.offers }} offer{{ '' if counts.offers == 1 else 's' }}.</strong>
+    {% endif %}
+  </div>
+{% else %}
+  <div class="headline">{{ counts.dismissed }} dismissed job{{ '' if counts.dismissed == 1 else 's' }}</div>
+  <div class="because">
+    Hidden from your feed and left out of your emails. Restore any of them and
+    they go straight back into review.
+  </div>
+{% endif %}

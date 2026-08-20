@@ -1,29 +1,122 @@
+{% set vw = active_view|default('review') %}
+{% set path = {'review':'/','saved':'/saved','applied':'/applied','dismissed':'/dismissed'}[vw] %}
+
 {% if page.jobs %}
   <form method="post" action="/jobs/bulk" id="bulk-form">
-    <input type="hidden" name="redirect_to" value="{{ request.url.path }}?{{ request.url.query }}">
+    <input type="hidden" name="redirect_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+    <input type="hidden" name="view" value="{{ vw }}">
   </form>
 
   <div class="listbar">
-    <label class="pick-all" title="Select all on this page">
-      <input type="checkbox" id="pick-all"><span>Select</span>
+    <label class="pick-all">
+      <input type="checkbox" id="pick-all" aria-label="Select every job on this page">
+      <span>Select all</span>
     </label>
-    <span class="sub" style="margin:0">
-      Showing {{ page.jobs|length }} of {{ page.total }} &middot; page {{ page.page }} of {{ page.pages }}
+    <span class="sub" style="margin:0" role="status" id="list-count">
+      {%- include "partials/list_count.html" -%}
     </span>
   </div>
 
   {% for job in page.jobs %}{% include "partials/job_card.html" %}{% endfor %}
-  <div class="actions" style="justify-content:center;margin-top:16px">
+
+  {% if page.pages > 1 %}
+  <nav class="actions pager" aria-label="Pagination">
     {% if page.has_prev %}
-      <a class="btn" href="/?{{ filters.to_query_string(page=page.page-1) }}">← Previous</a>
+      <a class="btn" href="{{ path }}?{{ filters.to_query_string(page=page.page-1) }}"
+         rel="prev">&larr; Previous</a>
     {% endif %}
+    <span class="sub" style="margin:0">Page {{ page.page }} of {{ page.pages }}</span>
     {% if page.has_next %}
-      <a class="btn" href="/?{{ filters.to_query_string(page=page.page+1) }}">Next →</a>
+      <a class="btn" href="{{ path }}?{{ filters.to_query_string(page=page.page+1) }}"
+         rel="next">Next &rarr;</a>
     {% endif %}
-  </div>
-{% else %}
+  </nav>
+  {% endif %}
+
+{% elif filters.is_filtered %}
+  {# Empty because of the filters, not because there is nothing here. Say which,
+     and offer the one-click way out. #}
   <div class="empty">
-    <p><strong>No jobs match these filters.</strong></p>
-    <p>Run a search, or loosen the filters.</p>
+    <div class="icon" aria-hidden="true">🔎</div>
+    <h2>No jobs match these filters</h2>
+    <p>
+      Your filters are narrower than the {{ vw }} list. Removing one of them
+      should bring results back.
+    </p>
+    <div class="actions" style="justify-content:center">
+      <a class="btn primary" href="{{ path }}">Clear all filters</a>
+    </div>
+  </div>
+
+{% elif vw == 'saved' %}
+  <div class="empty">
+    <div class="icon" aria-hidden="true">📌</div>
+    <h2>No saved jobs yet</h2>
+    <p>
+      Saving is for jobs you want to come back to. Press <strong>Save</strong> on
+      any job in your review feed and it will be waiting here &mdash; and stay in
+      the feed until you apply or dismiss it.
+    </p>
+    <div class="actions" style="justify-content:center">
+      <a class="btn primary" href="/">Go to review</a>
+    </div>
+  </div>
+
+{% elif vw == 'applied' %}
+  <div class="empty">
+    <div class="icon" aria-hidden="true">✓</div>
+    <h2>No applications tracked yet</h2>
+    <p>
+      When you press <strong>Apply</strong> we open the posting and then ask
+      whether you actually applied. Say yes and the job lands here, leaves your
+      feed, and stops appearing in your emails.
+    </p>
+    <div class="actions" style="justify-content:center">
+      <a class="btn primary" href="/">Find something to apply to</a>
+    </div>
+  </div>
+
+{% elif vw == 'dismissed' %}
+  <div class="empty">
+    <div class="icon" aria-hidden="true">🚫</div>
+    <h2>Nothing dismissed</h2>
+    <p>
+      Dismissing a job hides it from your feed and stops it being emailed to you.
+      Anything you dismiss shows up here, and you can restore it at any time.
+    </p>
+    <div class="actions" style="justify-content:center">
+      <a class="btn primary" href="/">Go to review</a>
+    </div>
+  </div>
+
+{% else %}
+  {# The review feed, genuinely empty. Two very different reasons for that. #}
+  <div class="empty">
+    {% if counts and (counts.applied or counts.dismissed or counts.saved) %}
+      <div class="icon" aria-hidden="true">🎉</div>
+      <h2>You're all caught up</h2>
+      <p>
+        You've dealt with every job we've found. When the next search turns up
+        internships matching your preferences, they'll appear here and in your
+        digest email.
+      </p>
+      <div class="actions" style="justify-content:center">
+        <a class="btn" href="/applied">See your applications</a>
+        <a class="btn" href="/settings">Adjust what we search for</a>
+      </div>
+    {% else %}
+      <div class="icon" aria-hidden="true">🚀</div>
+      <h2>No jobs found yet</h2>
+      <p>
+        Nothing has been discovered for your profile so far. Tell us what you're
+        looking for, or run a search right now and see what comes back.
+      </p>
+      <div class="actions" style="justify-content:center">
+        <form method="post" action="/run-search" style="margin:0">
+          <button class="btn primary" type="submit">Search now</button>
+        </form>
+        <a class="btn" href="/settings">Set your preferences</a>
+      </div>
+    {% endif %}
   </div>
 {% endif %}

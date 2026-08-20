@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.config import RESUME_DIR
 from app.logging_setup import get_logger
-from app.models import Job, Resume
+from app.models import Job, Resume, User
 from app.models.base import utcnow
 from app.pipeline.normalize import extract_skills
 from app.pipeline.textutil import normalize_text
@@ -74,8 +74,9 @@ def save_resume(
     content: bytes | None,
     text_override: str | None = None,
     make_default: bool = False,
+    user: User | None = None,
 ) -> Resume:
-    user = get_or_create_user(session)
+    user = user or get_or_create_user(session)
     RESUME_DIR.mkdir(parents=True, exist_ok=True)
 
     path: Path | None = None
@@ -106,8 +107,8 @@ def save_resume(
     return resume
 
 
-def list_resumes(session: Session) -> list[Resume]:
-    user = get_or_create_user(session)
+def list_resumes(session: Session, user: User | None = None) -> list[Resume]:
+    user = user or get_or_create_user(session)
     return list(
         session.scalars(
             select(Resume).where(Resume.user_id == user.id).order_by(Resume.created_at.desc())
@@ -115,14 +116,14 @@ def list_resumes(session: Session) -> list[Resume]:
     )
 
 
-def match_resume_to_job(session: Session, job: Job) -> dict:
+def match_resume_to_job(session: Session, job: Job, user: User | None = None) -> dict:
     """Recommend the best resume for a job, with an honest match percentage.
 
     The percentage is the share of the posting's detected skills that the
     resume actually evidences -- not a claim about the user's abilities beyond
     what their resume already says.
     """
-    resumes = list_resumes(session)
+    resumes = list_resumes(session, user)
     job_skills = [normalize_text(s) for s in (job.skills or []) if s]
 
     if not resumes:
@@ -166,7 +167,7 @@ def match_resume_to_job(session: Session, job: Job) -> dict:
     }
 
 
-def application_assistant(session: Session, job: Job) -> dict:
+def application_assistant(session: Session, job: Job, user: User | None = None) -> dict:
     """Talking points for a saved job, grounded in the user's own profile.
 
     Everything returned is drawn from the stored profile and the posting text;
@@ -174,8 +175,8 @@ def application_assistant(session: Session, job: Job) -> dict:
     """
     from app.services.preferences import load_profile
 
-    profile = load_profile(session)
-    resume_match = match_resume_to_job(session, job)
+    profile = load_profile(session, user=user)
+    resume_match = match_resume_to_job(session, job, user)
 
     candidate_skills = {normalize_text(s): s for s in profile.all_skills()}
     job_skills = [s for s in (job.skills or [])]

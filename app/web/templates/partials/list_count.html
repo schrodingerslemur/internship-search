@@ -1,0 +1,10 @@
+{# How many jobs the current filters match. Re-rendered after every action:
+   a list that says "4 jobs" over three cards is the kind of small lie that
+   makes people stop trusting the bigger numbers. #}
+{%- if total is defined -%}
+  {{ total }} job{{ '' if total == 1 else 's' }}
+{%- elif page.total > page.per_page -%}
+  Showing {{ page.jobs|length }} of {{ page.total }} &middot; page {{ page.page }} of {{ page.pages }}
+{%- else -%}
+  {{ page.total }} job{{ '' if page.total == 1 else 's' }}
+{%- endif -%}

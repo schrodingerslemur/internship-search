@@ -565,7 +565,7 @@ class TestChannelSetup:
                 smtp_host="smtp.example.com", smtp_user="a@b.c", smtp_password="secret"
             ),
         )
-        assert "is configured and ready" in client.get("/settings").text
+        assert "is set up and ready" in client.get("/settings").text
 
 
 class TestCredentialNormalisation:

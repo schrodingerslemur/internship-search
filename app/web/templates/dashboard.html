@@ -1,59 +1,128 @@
 {% extends "base.html" %}
+{#
+  One template serves Review, Saved, Applied and Dismissed. They are the same
+  list of the same cards over different slices of the lifecycle, so making them
+  four separate screens would only invite them to drift apart.
+#}
+{% set vw = active_view|default('review') %}
+{% set meta = {
+  'review':    {'title': 'Review',    'path': '/'},
+  'saved':     {'title': 'Saved',     'path': '/saved'},
+  'applied':   {'title': 'Applied',   'path': '/applied'},
+  'dismissed': {'title': 'Dismissed', 'path': '/dismissed'}
+}[vw] %}
+
+{% block title %}{{ meta.title }} · Internship Search{% endblock %}
+
 {% block content %}
-<h1>Internship Search</h1>
-<div class="sub">
-  {% if runs %}
-    Last run {{ runs[0].started_at|timeago }} &middot;
-    {{ runs[0].raw_jobs_found }} raw listings &rarr; {{ runs[0].unique_jobs }} unique
-    &middot; {{ runs[0].duplicates_removed }} duplicates merged
-  {% else %}
-    No searches run yet &mdash; press &ldquo;Run search now&rdquo;.
-  {% endif %}
-</div>
+<h1 class="visually-hidden-ish">{{ meta.title }}</h1>
 
-<div class="stats">
-  <div class="stat hot"><div class="n">{{ counts.apply_now }}</div><div class="l">🔥 Apply now</div></div>
-  <div class="stat strong"><div class="n">{{ counts.strong }}</div><div class="l">⭐ Strong matches</div></div>
-  <div class="stat"><div class="n">{{ counts.new_today }}</div><div class="l">🆕 New today</div></div>
-  <div class="stat"><div class="n">{{ counts.saved }}</div><div class="l">📌 Saved</div></div>
-  <div class="stat"><div class="n">{{ counts.applied }}</div><div class="l">📝 Applied</div></div>
-  <div class="stat"><div class="n">{{ counts.total_active }}</div><div class="l">Total active</div></div>
-</div>
+{# ------------------------------------------------------------------ overview
+   The first thing on the page answers "what should I do next?" -- a count, why
+   it changed, and when the system will act again. #}
+<section class="overview" aria-label="Overview">
+  <div id="feed-headline">{% include "partials/feed_headline.html" %}</div>
 
-<form class="filters" method="get" action="/">
-  <input type="search" name="q" value="{{ filters.q or '' }}" placeholder="Search title, company, description">
-  <select name="priority">
-    <option value="">Any priority</option>
-    {% for p in facets.priorities %}
-      <option value="{{ p }}" {% if filters.priority==p %}selected{% endif %}>{{ priority_meta(p).emoji }} {{ priority_meta(p).label }}</option>
-    {% endfor %}
-  </select>
-  <select name="company">
-    <option value="">Any company</option>
-    {% for c in facets.companies %}<option value="{{ c }}" {% if filters.company==c %}selected{% endif %}>{{ c }}</option>{% endfor %}
-  </select>
-  <select name="skill">
-    <option value="">Any skill</option>
-    {% for s in facets.skills %}<option value="{{ s }}" {% if filters.skill==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
-  </select>
-  <select name="source">
-    <option value="">Any source</option>
-    {% for s in facets.sources %}<option value="{{ s }}" {% if filters.source==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
-  </select>
-  <select name="remote">
-    <option value="">Any location type</option>
-    {% for r in ['remote','hybrid','onsite'] %}<option value="{{ r }}" {% if filters.remote==r %}selected{% endif %}>{{ r|title }}</option>{% endfor %}
-  </select>
-  <input type="number" name="min_score" value="{{ filters.min_score or '' }}" placeholder="Min score" style="width:110px">
-  <input type="number" name="posted_within_days" value="{{ filters.posted_within_days or '' }}" placeholder="Posted ≤ days" style="width:130px">
-  <select name="sort">
-    {% for value,label in [('score','Best match'),('date','Newest'),('deadline','Deadline'),('company','Company'),('discovered','Recently found')] %}
+  <div class="timing">
+    <span>
+      {% if runs %}
+        Last search {{ runs[0].started_at|timeago }} &middot;
+        {{ runs[0].unique_jobs }} unique job{{ '' if runs[0].unique_jobs == 1 else 's' }}
+        from {{ runs[0].raw_jobs_found }} listings
+        ({{ runs[0].duplicates_removed }} duplicate{{ '' if runs[0].duplicates_removed == 1 else 's' }} merged)
+      {% else %}
+        No searches run yet.
+      {% endif %}
+    </span>
+    <span>
+      {% if next_search_at %}
+        Next search {{ next_search_at|when(current_user.timezone if current_user else 'America/New_York') }}
+      {% else %}
+        Scheduled searches are off &mdash; <a href="/settings">turn them on</a>
+      {% endif %}
+    </span>
+  </div>
+</section>
+
+{# ------------------------------------------------------- where everything went
+   Each counter links to the list it counts, so "what happened to that job?" is
+   always one click from an answer. #}
+<nav class="elsewhere" id="feed-elsewhere" aria-label="Job lists">{% include "partials/feed_elsewhere.html" %}</nav>
+
+{# ------------------------------------------------------------------- filters
+   Search and sort are always visible because they are used constantly.
+   Everything else is behind "More filters", which opens by itself whenever one
+   of the filters inside it is in use. #}
+<form class="filters" method="get" action="{{ meta.path }}" role="search">
+  <input type="search" name="q" value="{{ filters.q or '' }}"
+         placeholder="Search title, company, description" aria-label="Search jobs">
+  <select name="sort" aria-label="Sort by">
+    {% for value,label in [('score','Best match'),('date','Newest'),('deadline','Deadline soonest'),('company','Company A–Z'),('discovered','Recently found')] %}
       <option value="{{ value }}" {% if filters.sort==value %}selected{% endif %}>{{ label }}</option>
     {% endfor %}
+    {% if vw == 'saved' %}<option value="saved" {% if filters.sort=='saved' %}selected{% endif %}>Recently saved</option>{% endif %}
+    {% if vw == 'applied' %}<option value="applied" {% if filters.sort=='applied' %}selected{% endif %}>Recently applied</option>{% endif %}
+    {% if vw == 'dismissed' %}<option value="dismissed" {% if filters.sort=='dismissed' %}selected{% endif %}>Recently dismissed</option>{% endif %}
   </select>
-  <button class="btn primary" type="submit">Filter</button>
-  <a class="btn" href="/">Reset</a>
+  <button class="btn primary" type="submit">Search</button>
+
+  <details class="more-filters" {% if filters.is_filtered %}open{% endif %}>
+    <summary>More filters</summary>
+    <div class="more-filters-body">
+      <select name="priority" aria-label="Priority">
+        <option value="">Any priority</option>
+        {% for p in facets.priorities %}
+          <option value="{{ p }}" {% if filters.priority==p %}selected{% endif %}>{{ priority_meta(p).emoji }} {{ priority_meta(p).label }}</option>
+        {% endfor %}
+      </select>
+      <select name="company" aria-label="Company">
+        <option value="">Any company</option>
+        {% for c in facets.companies %}<option value="{{ c }}" {% if filters.company==c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+      </select>
+      <select name="remote" aria-label="Work arrangement">
+        <option value="">Any arrangement</option>
+        {% for r in ['remote','hybrid','onsite'] %}<option value="{{ r }}" {% if filters.remote==r %}selected{% endif %}>{{ remote_meta(r).label }}</option>{% endfor %}
+      </select>
+      <select name="skill" aria-label="Skill">
+        <option value="">Any skill</option>
+        {% for s in facets.skills %}<option value="{{ s }}" {% if filters.skill==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+      </select>
+      <select name="source" aria-label="Source">
+        <option value="">Any source</option>
+        {% for s in facets.sources %}<option value="{{ s }}" {% if filters.source==s %}selected{% endif %}>{{ s|humanize }}</option>{% endfor %}
+      </select>
+      <select name="posted_within_days" aria-label="Posted within">
+        <option value="">Any date posted</option>
+        {% for d,label in [(1,'Posted today'),(3,'Last 3 days'),(7,'Last week'),(30,'Last month')] %}
+          <option value="{{ d }}" {% if filters.posted_within_days==d %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <select name="min_score" aria-label="Minimum match">
+        <option value="">Any match score</option>
+        {% for d in [60,70,80,90] %}
+          <option value="{{ d }}" {% if filters.min_score==d %}selected{% endif %}>{{ d }}+ match</option>
+        {% endfor %}
+      </select>
+      <label class="inline-check">
+        <input type="checkbox" name="has_salary" value="1" {% if filters.has_salary %}checked{% endif %}>
+        <span>Only jobs listing pay</span>
+      </label>
+      <button class="btn primary" type="submit">Apply filters</button>
+    </div>
+  </details>
 </form>
+
+{% if filters.is_filtered %}
+  <div class="active-filters">
+    <span class="lead">Filtered by:</span>
+    {% for chip in filters.active_chips() %}
+      <a class="f" href="{{ meta.path }}?{{ chip.without }}"
+         title="Remove this filter">{{ chip.label }}: {{ chip.value }} <span class="x" aria-hidden="true">×</span>
+        <span class="sr-only">(remove)</span></a>
+    {% endfor %}
+    <a class="clear-all" href="{{ meta.path }}">Clear all filters</a>
+  </div>
+{% endif %}
 
 {% include "partials/job_list.html" %}
 {% endblock %}

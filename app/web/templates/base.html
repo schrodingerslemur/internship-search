@@ -22,6 +22,7 @@
 }
 *{box-sizing:border-box}
 .lbl-icon{display:none}
+.run-search-menu{display:none}
 nav details.account{position:relative;margin-left:10px}
 nav details.account summary{list-style:none;cursor:pointer;width:30px;height:30px;border-radius:50%;
  background:var(--accent-dim);color:var(--text);display:grid;place-items:center;font-size:13px;font-weight:700}
@@ -41,7 +42,7 @@ main.bare{max-width:none;padding:0}
 .job-pick,#pick-all{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
 .job.is-done{opacity:.55}
 /* Only appears once something is selected -- no permanent clutter. */
-.bulkbar{position:fixed;left:50%;transform:translateX(-50%) translateY(120%);bottom:22px;z-index:40;
+.bulkbar{position:fixed;left:50%;transform:translateX(-50%) translateY(260%);bottom:22px;z-index:40;
  display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);
  border-radius:12px;padding:10px 12px;box-shadow:0 12px 34px rgba(0,0,0,.34);
  transition:transform .16s ease}
@@ -129,6 +130,10 @@ h3{font-size:14px;margin:0 0 8px;color:var(--muted);text-transform:uppercase;let
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn.primary:hover{filter:brightness(1.1)}
 .btn.sm{padding:4px 9px;font-size:11.5px}
+/* In flight. The button says so itself rather than the page appearing to have
+   ignored the click, and it cannot be pressed a second time. */
+.btn[disabled],button[disabled]{opacity:.5;cursor:progress;pointer-events:none}
+.htmx-request.btn,.htmx-request .btn{opacity:.6}
 .badge{display:inline-block;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:600}
 .badge.new{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
 .badge.updated{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
@@ -149,7 +154,7 @@ label{font-size:12.5px;color:var(--muted);display:block;margin-bottom:4px}
 .field{margin-bottom:14px}
 .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
 .help{font-size:11.5px;color:var(--dim);margin-top:4px}
-.kanban{display:grid;grid-template-columns:repeat(7,minmax(190px,1fr));gap:10px;overflow-x:auto}
+.kanban{display:grid;grid-template-columns:repeat(5,minmax(190px,1fr));gap:10px;overflow-x:auto}
 .col{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;min-height:120px}
 .col h4{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
 .card{background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:9px;margin-bottom:7px;font-size:12.5px}
@@ -163,7 +168,7 @@ label{font-size:12.5px;color:var(--muted);display:block;margin-bottom:4px}
 .pill{font-size:11px;padding:1px 7px;border-radius:20px;background:var(--panel-2);color:var(--muted)}
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 .split{display:grid;grid-template-columns:2fr 1fr;gap:18px}
-@media(max-width:900px){.split{grid-template-columns:1fr}.kanban{grid-template-columns:repeat(7,240px)}}
+@media(max-width:900px){.split{grid-template-columns:1fr}.kanban{grid-template-columns:repeat(5,240px)}}
 
 /* ---------------------------------------------------------------------
    Phones. Everything above is written for a wide screen; these are the
@@ -179,14 +184,15 @@ label{font-size:12.5px;color:var(--muted);display:block;margin-bottom:4px}
   nav{gap:0;flex-wrap:nowrap}
   .lbl-full{display:none}
   .lbl-icon{display:inline;font-size:15px;line-height:1}
-  nav form button{padding:7px 10px}
+  .run-search-nav{display:none}
+  .run-search-menu{display:block}
   /* The wordmark is the least useful thing on a narrow screen; the rocket
      still identifies the app. */
   .brand-text{display:none}
   nav .brand{padding:12px 10px 12px 0;font-size:17px}
-  nav a.tab{padding:12px 10px;font-size:13.5px;white-space:nowrap}
-  nav form{flex:0 0 auto}
-  nav details.account{margin-left:6px}
+  nav a.tab{padding:12px 7px;font-size:13px;white-space:nowrap}
+  nav a.tab .count{margin-left:4px;font-size:10.5px;line-height:15px;min-width:15px}
+  nav details.account{margin-left:4px;flex:0 0 auto}
 
   h1{font-size:19px}
   h2{font-size:16px;margin:20px 0 10px}
@@ -216,10 +222,13 @@ label{font-size:12.5px;color:var(--muted);display:block;margin-bottom:4px}
      buttons starved the text down to one word per line. Wrapping moves them
      to their own full-width row underneath. */
   .job{padding:12px;gap:10px;flex-wrap:wrap}
-  .job .body{flex:1 1 0;min-width:0}
-  .job .actions{flex:1 0 100%;margin-top:2px;padding-top:10px;
+  /* `.job > .actions` out-specifies the desktop rule above; without the same
+     specificity here the bar stays beside the text and starves the title. */
+  .job > .body{flex:1 1 100%;min-width:0}
+  .job > .actions{flex:1 0 100%;margin-top:2px;padding-top:10px;
    border-top:1px solid var(--line)}
   .job .actions .btn{flex:1 1 auto;text-align:center}
+  .job .asking{flex:1 1 100%}
   .job .score{flex:0 0 44px}
   .job .score .v{font-size:18px}
   .job .co{font-size:14.5px}
@@ -230,12 +239,12 @@ label{font-size:12.5px;color:var(--muted);display:block;margin-bottom:4px}
   th,td{padding:8px;white-space:nowrap}
 
   /* The Kanban board is inherently wide; let it scroll on its own. */
-  .kanban{grid-template-columns:repeat(7,80vw);gap:8px}
+  .kanban{grid-template-columns:repeat(5,80vw);gap:8px}
 
   /* Full width beats centred once the screen is narrower than the bar, and
      the safe-area inset keeps it clear of the iPhone home indicator. */
   .bulkbar{left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));
-   transform:translateY(160%);justify-content:space-between;gap:6px;padding:10px}
+   transform:translateY(260%);justify-content:space-between;gap:6px;padding:10px}
   .bulkbar.show{transform:translateY(0)}
   .bulkbar button{padding:9px 10px;font-size:12.5px}
   .bulkbar .n{padding:0;font-size:12px}
@@ -252,6 +261,184 @@ label{font-size:12.5px;color:var(--muted);display:block;margin-bottom:4px}
   .bulkbar .clear{display:none}
 }
 
+
+/* Screen-reader-only text, for labels a sighted user reads from context. */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+ clip:rect(0 0 0 0);white-space:nowrap;border:0}
+/* The page heading is carried by the overview strip; the h1 stays in the
+   document for structure without repeating it on screen. */
+.visually-hidden-ish{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+/* Card: title first, company second. The title is what you scan for. */
+/* The card title is an h3 for document structure, so it has to opt out of the
+   uppercase section-heading styling that h3 carries elsewhere. */
+.job .ti{font-size:15.5px;font-weight:650;margin:0;line-height:1.35;overflow-wrap:anywhere;
+ color:var(--text);text-transform:none;letter-spacing:normal}
+.job .ti a{color:var(--text)}
+.job .ti a:hover{color:var(--accent)}
+.job .co{font-weight:500;font-size:13px;color:var(--muted);margin-top:3px;
+ display:flex;align-items:center;gap:8px;flex-wrap:wrap;overflow-wrap:anywhere}
+.job .score .m{font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+.job .when{font-size:12px;color:var(--dim);margin-top:7px}
+.job article,.job{overflow-wrap:anywhere}
+/* The action bar sits in its own column and does not compete with the text.
+   `min-width` on the body is what stops a wide action bar from squeezing a long
+   title down to one character per line. */
+.job > .actions{flex:0 0 auto;align-items:flex-start}
+.job > .body{flex:1 1 340px;min-width:220px}
+.pager{justify-content:center;margin-top:18px;align-items:center;gap:12px}
+
+/* Filters: two controls always, the rest one click away. */
+form.filters{align-items:flex-start}
+form.filters > input[type=search]{flex:1 1 280px;min-width:0}
+.more-filters{flex:1 1 100%;order:9}
+.more-filters summary{cursor:pointer;font-size:12.5px;color:var(--accent);
+ padding:6px 2px;list-style:none;width:max-content}
+.more-filters summary::-webkit-details-marker{display:none}
+.more-filters summary::before{content:"+ ";font-weight:700}
+.more-filters[open] summary::before{content:"\2212 "}
+.more-filters-body{display:flex;flex-wrap:wrap;gap:8px;align-items:center;
+ padding:12px;margin-top:4px;background:var(--panel);border:1px solid var(--line);
+ border-radius:10px}
+.inline-check{display:flex;align-items:center;gap:7px;margin:0;font-size:12.5px;
+ color:var(--text);cursor:pointer}
+.inline-check input{width:16px;height:16px;accent-color:var(--accent)}
+/* Advanced settings: present, but not in the way. */
+details.advanced{margin-top:26px;border-top:1px solid var(--line);padding-top:10px}
+details.advanced > summary{cursor:pointer;list-style:none;padding:8px 0}
+details.advanced > summary::-webkit-details-marker{display:none}
+details.advanced > summary h2{margin:0 10px 0 0;font-size:17px}
+details.advanced > summary::before{content:"▸ ";color:var(--accent);font-weight:700}
+details.advanced[open] > summary::before{content:"▾ "}
+h3.adv-h{margin:22px 0 10px;color:var(--muted)}
+/* The save button follows you down a long form. */
+.save-bar{position:sticky;bottom:0;margin-top:22px;padding:14px 0;background:var(--bg);
+ border-top:1px solid var(--line);z-index:10}
+.save-bar .btn{padding:10px 20px}
+.stage-form{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.stage-form label{margin-bottom:6px}
+
+/* ---------------------------------------------------------------------
+   Toasts. Every state change says what it did and offers the way back, so
+   no reversible action needs a confirmation dialog in front of it.
+   --------------------------------------------------------------------- */
+#toast-host{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:60;
+ display:flex;flex-direction:column-reverse;gap:8px;width:min(460px,calc(100vw - 24px));
+ pointer-events:none}
+.toast{display:flex;align-items:center;gap:14px;background:var(--panel);
+ border:1px solid var(--line);border-radius:10px;padding:11px 14px;
+ box-shadow:0 12px 34px rgba(0,0,0,.34);font-size:13.5px;pointer-events:auto;
+ animation:toast-in .18s ease}
+.toast.bad{border-color:var(--bad)}
+.toast .t{flex:1;min-width:0}
+.toast form{margin:0}
+.toast .undo{background:none;border:0;color:var(--accent);font:inherit;font-size:13.5px;
+ font-weight:600;cursor:pointer;padding:4px 6px;border-radius:6px}
+.toast .undo:hover{text-decoration:underline}
+.toast .dismiss{background:none;border:0;color:var(--dim);font:inherit;cursor:pointer;
+ font-size:16px;line-height:1;padding:4px 6px;border-radius:6px}
+@keyframes toast-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+/* ---------------------------------------------------------------------
+   Job status. Never colour alone -- each state carries a word, so it reads
+   the same to a screen reader and to someone who cannot tell the hues apart.
+   --------------------------------------------------------------------- */
+.state{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;
+ padding:2px 9px;border-radius:20px;border:1px solid var(--line);background:var(--panel-2);
+ color:var(--muted);white-space:nowrap}
+.state.saved{color:var(--accent);border-color:var(--accent-dim)}
+.state.applied{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,var(--line))}
+.state.dismissed{color:var(--dim)}
+.state.interview,.state.assessment{color:var(--warn);
+ border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}
+.state.offer{color:var(--hot);border-color:color-mix(in srgb,var(--hot) 40%,var(--line))}
+.state.rejected{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 35%,var(--line))}
+
+/* The question the app asks after you open an application, instead of
+   assuming the click meant you submitted one. */
+.asking{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+ background:color-mix(in srgb,var(--accent) 9%,transparent);
+ border:1px solid var(--accent-dim);border-radius:8px;padding:7px 10px}
+.asking .q{font-size:12.5px;color:var(--text);font-weight:600}
+
+/* Tab counters: "how many are waiting" belongs in the navigation, not three
+   clicks in. */
+nav a.tab .count{display:inline-block;margin-left:6px;background:var(--accent);color:#fff;
+ border-radius:20px;padding:0 6px;font-size:11px;font-weight:700;line-height:17px;
+ min-width:17px;text-align:center}
+nav a.tab.active .count{background:var(--accent)}
+
+/* Overview strip: the answer to "what do I do next", above everything else. */
+.overview{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+ padding:18px 20px;margin-bottom:18px}
+.overview .headline{font-size:24px;font-weight:700;line-height:1.2}
+.overview .because{color:var(--muted);font-size:13.5px;margin-top:5px}
+.overview .timing{color:var(--dim);font-size:12.5px;margin-top:10px;display:flex;
+ flex-wrap:wrap;gap:6px 16px}
+.overview .caught-up{font-size:15px;font-weight:600}
+
+/* Where everything else went. Counters that link to the list they count. */
+.elsewhere{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
+.elsewhere a{display:flex;align-items:baseline;gap:7px;background:var(--panel);
+ border:1px solid var(--line);border-radius:9px;padding:8px 13px;color:var(--text);
+ font-size:13px}
+.elsewhere a:hover{border-color:var(--accent);text-decoration:none}
+.elsewhere a.current{border-color:var(--accent)}
+.elsewhere a b{font-size:15px}
+.elsewhere a span{color:var(--muted);font-size:12.5px}
+
+/* Active filters, shown as removable chips: a job never disappears without
+   the reason being visible on screen. */
+.active-filters{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin:-6px 0 16px}
+.active-filters .lead{font-size:12.5px;color:var(--muted)}
+.active-filters a.f{display:inline-flex;align-items:center;gap:6px;background:var(--panel-2);
+ border:1px solid var(--accent-dim);border-radius:20px;padding:3px 10px;font-size:12px;
+ color:var(--text)}
+.active-filters a.f:hover{border-color:var(--bad);text-decoration:none}
+.active-filters a.f .x{color:var(--dim);font-weight:700}
+.active-filters a.clear-all{font-size:12.5px;color:var(--accent)}
+
+/* Empty states say what happened, why, and what to do -- never a blank box. */
+.empty h2{margin:0 0 8px;font-size:17px;color:var(--text);text-transform:none;letter-spacing:0}
+.empty p{margin:0 auto 14px;max-width:46ch;font-size:13.5px}
+.empty .icon{font-size:34px;line-height:1;margin-bottom:10px}
+
+/* Search-in-progress. A long crawl must not look like a hung page. */
+.running{display:flex;align-items:center;gap:10px}
+.spinner{width:15px;height:15px;border-radius:50%;border:2px solid var(--line);
+ border-top-color:var(--accent);animation:spin .7s linear infinite;flex:0 0 auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+.htmx-request .btn-label{opacity:.45}
+
+/* Visible keyboard focus on everything interactive. The default outline is
+   invisible against the dark panels. */
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,
+textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible{
+ outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--panel);color:var(--text);
+ padding:10px 14px;border:1px solid var(--accent);border-radius:0 0 8px 0;z-index:100}
+.skip-link:focus{left:0}
+
+@media (max-width: 640px){
+  #toast-host{bottom:calc(10px + env(safe-area-inset-bottom));width:calc(100vw - 20px)}
+  .job .ti{font-size:15px}
+  .more-filters-body > select,.more-filters-body > input{flex:1 1 100%}
+  .more-filters-body > button{flex:1 1 100%}
+  .active-filters{gap:6px}
+  .pager{flex-wrap:wrap}
+  .overview{padding:14px 15px}
+  .overview .headline{font-size:20px}
+  .elsewhere{gap:7px}
+  .elsewhere a{flex:1 1 calc(50% - 4px);justify-content:center;padding:10px 8px}
+}
+
+/* Respect a stated preference for less movement. */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;
+   transition-duration:.001ms !important;scroll-behavior:auto !important}
+}
+
 .prose{font-size:13.5px;line-height:1.65;white-space:pre-wrap;color:var(--text);
  max-height:460px;overflow-y:auto;background:var(--panel-2);padding:13px;border-radius:8px}
 ul.clean{list-style:none;padding:0;margin:0}
@@ -260,24 +447,39 @@ ul.clean li{padding:3px 0;font-size:13px}
 </head>
 <body>
 {% if not hide_nav %}
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="top">
-  <nav>
+  <nav aria-label="Main">
     <span class="brand">🚀<span class="brand-text"> Internship Search</span></span>
-    <a class="tab {% if request.url.path=='/' %}active{% endif %}" href="/">Jobs</a>
-    <a class="tab {% if request.url.path=='/tracker' %}active{% endif %}" href="/tracker">Tracker</a>
-    <a class="tab {% if request.url.path in ['/coverage','/analytics'] %}active{% endif %}" href="/coverage">Insights</a>
-    <a class="tab {% if request.url.path in ['/settings','/profile'] %}active{% endif %}" href="/settings">Settings</a>
+    {# The lifecycle, left to right, in the order a job passes through it. #}
+    <a class="tab {% if request.url.path=='/' %}active{% endif %}" href="/"
+       {% if request.url.path=='/' %}aria-current="page"{% endif %}>Review<span
+       id="nav-review-count">{% include "partials/nav_count.html" %}</span></a>
+    <a class="tab {% if request.url.path=='/saved' %}active{% endif %}" href="/saved"
+       {% if request.url.path=='/saved' %}aria-current="page"{% endif %}>Saved</a>
+    <a class="tab {% if request.url.path=='/applied' %}active{% endif %}" href="/applied"
+       {% if request.url.path=='/applied' %}aria-current="page"{% endif %}>Applied</a>
+    <a class="tab {% if request.url.path=='/dismissed' %}active{% endif %}" href="/dismissed"
+       {% if request.url.path=='/dismissed' %}aria-current="page"{% endif %}>Dismissed</a>
     <span class="spacer"></span>
-    <form method="post" action="/run-search" style="margin:0">
-      <button class="btn sm" type="submit" title="Run search now"><span class="lbl-full">Run search</span><span class="lbl-icon">↻</span></button>
+    {# On a phone four tabs plus this button plus the avatar do not fit, and the
+       avatar is the one that must never be squeezed out -- it holds sign-out.
+       So below 640px this moves into the account menu instead. #}
+    <form method="post" action="/run-search" class="run-search-nav" style="margin:0">
+      <button class="btn sm" type="submit" title="Search the job boards now">Search now</button>
     </form>
     {% if current_user %}
     <details class="account">
       <summary title="{{ current_user.email }}">{{ (current_user.name or current_user.email)[:1]|upper }}</summary>
       <div class="account-menu">
         <div class="account-who">{{ current_user.email }}</div>
+        <form method="post" action="/run-search" class="run-search-menu">
+          <button type="submit">Search now</button>
+        </form>
+        <a href="/tracker">Application tracker</a>
+        <a href="/coverage">Search insights</a>
         <a href="/profile">Your profile</a>
-        <a href="/settings">Preferences</a>
+        <a href="/settings">Settings</a>
         <form method="post" action="/logout"><button type="submit">Sign out</button></form>
       </div>
     </details>
@@ -285,16 +487,27 @@ ul.clean li{padding:3px 0;font-size:13px}
   </nav>
 </header>
 {% endif %}
-<main{% if hide_nav %} class="bare"{% endif %}>
+<main id="main"{% if hide_nav %} class="bare"{% endif %}>
 {% block content %}{% endblock %}
 </main>
 
 {% if not hide_nav %}
+{# Confirmations land here. HTMX responses push into it out-of-band, so an
+   action anywhere on the page reports itself in one consistent place. #}
+<div id="toast-host" role="status" aria-live="polite"></div>
+{% if flash %}<script>window.__flash = {{ {'text': flash.text, 'bad': flash.bad}|tojson }};</script>{% endif %}
+
+{# Bulk actions offer what makes sense on the page you are on: there is no
+   point offering "Dismiss" on the Dismissed list. #}
 <div class="bulkbar" id="bulkbar" aria-live="polite">
   <span class="n"><b id="bulk-n">0</b> selected</span>
-  <button class="btn" type="submit" form="bulk-form" name="status" value="saved">Save</button>
-  <button class="btn" type="submit" form="bulk-form" name="status" value="applied">Applied</button>
-  <button class="btn" type="submit" form="bulk-form" name="status" value="dismissed">Dismiss</button>
+  {% if active_view|default('review') == 'dismissed' %}
+    <button class="btn primary" type="submit" form="bulk-form" name="status" value="new">Restore</button>
+  {% else %}
+    <button class="btn" type="submit" form="bulk-form" name="status" value="saved">Save</button>
+    <button class="btn" type="submit" form="bulk-form" name="status" value="applied">Applied</button>
+    <button class="btn" type="submit" form="bulk-form" name="status" value="dismissed">Dismiss</button>
+  {% endif %}
   <button class="clear" type="button" id="bulk-clear">Clear</button>
 </div>
 <script>
@@ -328,6 +541,72 @@ ul.clean li{padding:3px 0;font-size:13px}
   // HTMX swaps the list in place; the new checkboxes start unticked.
   document.body.addEventListener('htmx:afterSwap', sync);
   sync();
+})();
+
+// Toasts fade themselves out. Undo lives inside the toast, so the window in
+// which it is offered is the window in which it is visible.
+(function () {
+  const host = document.getElementById('toast-host');
+  const LIFETIME = 7000;
+
+  function retire(toast) {
+    if (!toast || toast.dataset.retiring) return;
+    toast.dataset.retiring = '1';
+    toast.remove();
+  }
+
+  function watch(toast) {
+    if (!toast || toast.dataset.watched) return;
+    toast.dataset.watched = '1';
+    // Only ever keep a couple on screen; a rapid triage session would
+    // otherwise bury the page under its own confirmations.
+    Array.from(host.children).slice(0, -2).forEach(retire);
+    setTimeout(() => retire(toast), LIFETIME);
+  }
+
+  function show(text, bad) {
+    const toast = document.createElement('div');
+    toast.className = 'toast' + (bad ? ' bad' : '');
+    const label = document.createElement('span');
+    label.className = 't';
+    label.textContent = text;
+    toast.appendChild(label);
+    host.prepend(toast);
+    watch(toast);
+  }
+
+  host.addEventListener('click', e => {
+    if (e.target.classList.contains('dismiss')) retire(e.target.closest('.toast'));
+  });
+
+  document.body.addEventListener('htmx:afterSwap', () => {
+    Array.from(host.children).forEach(watch);
+  });
+
+  // A confirmation that survived a full page load (a non-HTMX form post).
+  if (window.__flash) show(window.__flash.text, window.__flash.bad);
+
+  // Opening an application is a plain link -- the browser handles the new tab
+  // natively -- and the click is reported separately so the card can ask
+  // whether the application actually went through. Without JS the link still
+  // works; only the follow-up question is lost.
+  document.addEventListener('click', e => {
+    const link = e.target.closest('[data-record-open]');
+    if (!link || !window.htmx) return;
+    htmx.ajax('POST', link.dataset.recordOpen, {
+      target: link.dataset.recordTarget,
+      swap: 'outerHTML',
+      values: { view: link.dataset.recordView || 'review' },
+    });
+  });
+
+  // A failed request must say so rather than looking like a dead button.
+  document.body.addEventListener('htmx:responseError', () => {
+    show('That did not go through. Check your connection and try again.', true);
+  });
+  document.body.addEventListener('htmx:sendError', () => {
+    show('We could not reach the server. Your change was not saved.', true);
+  });
 })();
 </script>
 {% endif %}

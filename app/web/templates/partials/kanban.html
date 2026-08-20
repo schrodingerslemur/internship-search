@@ -1,0 +1,68 @@
+{# The board, as a single swappable unit.
+
+   Moving a job re-renders this whole element rather than splicing one card
+   from one column into another. The board is small (at most a few hundred
+   cards) and re-rendering it means a column count can never disagree with the
+   cards under it -- which is exactly the bug that splicing invites. #}
+<div class="kanban" id="kanban">
+  {% for col in columns %}
+    <div class="col">
+      <h4>{{ status_meta(col.value).icon }} {{ status_meta(col.value).label }} ({{ board[col.value]|length }})</h4>
+      {% for job in board[col.value] %}
+        <div class="card" id="card-{{ job.id }}">
+          <div><a href="/job/{{ job.id }}"><strong>{{ job.title }}</strong></a></div>
+          <div class="help">{{ job.company_name }}</div>
+          <div class="help">
+            {{ job.relevance_score|round|int }}/100 &middot;
+            {{ job.location_raw or 'Location not listed' }}
+          </div>
+          {% set db = deadline_badge(job) %}
+          {% if db.level in ('urgent','soon') %}
+            <div class="help">{{ db.emoji }} {{ db.text }}</div>
+          {% endif %}
+
+          {# One step forward, one step back, both in place. `hx-disabled-elt`
+             greys the button out for the duration, so an impatient second click
+             cannot send a second move. #}
+          {% set nxt = {'applied':'assessment','assessment':'interview','interview':'offer'} %}
+          <div class="actions" style="margin-top:8px">
+            {% if nxt.get(col.value) %}
+            <form method="post" action="/job/{{ job.id }}/status"
+                  hx-post="/job/{{ job.id }}/status" hx-target="#kanban" hx-swap="outerHTML"
+                  hx-disabled-elt="find button" style="margin:0">
+              <input type="hidden" name="status" value="{{ nxt[col.value] }}">
+              <input type="hidden" name="redirect_to" value="/tracker">
+              <input type="hidden" name="view" value="tracker">
+              <button class="btn sm" type="submit">
+                Move to {{ status_meta(nxt[col.value]).label }}</button>
+            </form>
+            {% endif %}
+            {% if col.value != 'rejected' %}
+            <form method="post" action="/job/{{ job.id }}/status"
+                  hx-post="/job/{{ job.id }}/status" hx-target="#kanban" hx-swap="outerHTML"
+                  hx-disabled-elt="find button" style="margin:0">
+              <input type="hidden" name="status" value="rejected">
+              <input type="hidden" name="redirect_to" value="/tracker">
+              <input type="hidden" name="view" value="tracker">
+              <button class="btn sm" type="submit" title="Record that this one did not work out">
+                Rejected</button>
+            </form>
+            {% else %}
+            <form method="post" action="/job/{{ job.id }}/status"
+                  hx-post="/job/{{ job.id }}/status" hx-target="#kanban" hx-swap="outerHTML"
+                  hx-disabled-elt="find button" style="margin:0">
+              <input type="hidden" name="status" value="applied">
+              <input type="hidden" name="redirect_to" value="/tracker">
+              <input type="hidden" name="view" value="tracker">
+              <button class="btn sm" type="submit" title="Put this back in the pipeline">
+                Back to Applied</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      {% else %}
+        <div class="help">Nothing here yet.</div>
+      {% endfor %}
+    </div>
+  {% endfor %}
+</div>

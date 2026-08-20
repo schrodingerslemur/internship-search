@@ -1,0 +1,8 @@
+{# The response to moving a job on the board: the board as it now stands, plus
+   a confirmation carrying the way back. #}
+{% include "partials/kanban.html" %}
+<div id="tracker-stats" hx-swap-oob="true">{% include "partials/tracker_stats.html" %}</div>
+<span id="nav-review-count" hx-swap-oob="true">{% include "partials/nav_count.html" %}</span>
+<div id="toast-host" hx-swap-oob="afterbegin">
+  {% include "partials/toast.html" %}
+</div>

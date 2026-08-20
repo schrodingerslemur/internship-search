@@ -73,6 +73,62 @@ def priority_meta(value: str) -> dict[str, str]:
     }
 
 
+#: How each lifecycle state is named and marked in the UI. The icon is a
+#: redundant cue, never the only one: the label always travels with it, so the
+#: state is legible without colour vision and to a screen reader.
+STATUS_META: dict[str, dict[str, str]] = {
+    "new": {"label": "New", "icon": "✨"},
+    "saved": {"label": "Saved", "icon": "📌"},
+    "applied": {"label": "Applied", "icon": "✓"},
+    "assessment": {"label": "Assessment", "icon": "📝"},
+    "interview": {"label": "Interview", "icon": "🗣"},
+    "offer": {"label": "Offer", "icon": "🎉"},
+    "rejected": {"label": "Rejected", "icon": "✕"},
+    "dismissed": {"label": "Dismissed", "icon": "🚫"},
+    "expired": {"label": "Expired", "icon": "⏳"},
+}
+
+
+def status_meta(value: str | None) -> dict[str, str]:
+    return STATUS_META.get(
+        str(value or "new"), {"label": humanize(value), "icon": "•"}
+    )
+
+
+REMOTE_META: dict[str, dict[str, str]] = {
+    "remote": {"label": "Remote", "icon": "🏠"},
+    "hybrid": {"label": "Hybrid", "icon": "🔄"},
+    "onsite": {"label": "On-site", "icon": "🏢"},
+}
+
+
+def remote_meta(value: str | None) -> dict[str, str]:
+    return REMOTE_META.get(str(value or ""), {"label": humanize(value), "icon": "📍"})
+
+
+def when_text(value: datetime | None, timezone: str = "America/New_York") -> str:
+    """An absolute time, in the user's timezone rather than the server's.
+
+    Stored timestamps are naive UTC. "Tomorrow at 08:00" has to mean 08:00 where
+    the user is, or the promise the dashboard makes about the next search is
+    simply wrong for most of the day.
+    """
+    if not value:
+        return ""
+    from datetime import UTC
+    from zoneinfo import ZoneInfo
+
+    aware = value if value.tzinfo else value.replace(tzinfo=UTC)
+    try:
+        local = aware.astimezone(ZoneInfo(timezone))
+    except Exception:
+        local = aware
+    today = datetime.now(local.tzinfo).date()
+    delta = (local.date() - today).days
+    day = {0: "today", 1: "tomorrow"}.get(delta) or local.strftime("%a %d %b")
+    return f"{day} at {local.strftime('%H:%M')}"
+
+
 def salary_text(job) -> str:
     if job.salary_min is None:
         return "Not listed"
@@ -111,6 +167,9 @@ templates.env.filters["timeago"] = timeago
 templates.env.filters["salary"] = salary_text
 templates.env.filters["humanize"] = humanize
 templates.env.filters["score_class"] = score_class
+templates.env.filters["when"] = when_text
 templates.env.globals["deadline_badge"] = deadline_badge
+templates.env.globals["status_meta"] = status_meta
+templates.env.globals["remote_meta"] = remote_meta
 templates.env.globals["priority_meta"] = priority_meta
 templates.env.globals["now"] = utcnow

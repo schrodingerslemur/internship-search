@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Job not found{% endblock %}
+{% block content %}
+<div class="empty">
+  <div class="icon" aria-hidden="true">🔍</div>
+  <h2>We can't find that job</h2>
+  <p>
+    It may have been removed after the source took the posting down, or the link
+    may be out of date. Anything you already saved or applied to is still in your
+    lists.
+  </p>
+  <div class="actions" style="justify-content:center">
+    <a class="btn primary" href="/">Back to review</a>
+    <a class="btn" href="/applied">Applied</a>
+  </div>
+</div>
+{% endblock %}

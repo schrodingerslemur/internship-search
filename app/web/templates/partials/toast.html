@@ -1,0 +1,16 @@
+{# A confirmation with its own undo. Because every reversible action lands
+   here, none of them needs a confirmation dialog beforehand. #}
+<div class="toast{% if toast.bad %} bad{% endif %}">
+  <span class="t">{{ toast.text }}</span>
+  {% if toast.undo_status %}
+    {# A full form post, not HTMX: the restored job has to reappear in the list
+       it belongs to, and a reload is the honest way to show that. #}
+    <form method="post" action="/job/{{ toast.job_id }}/status">
+      <input type="hidden" name="status" value="{{ toast.undo_status }}">
+      <input type="hidden" name="view" value="{{ toast.view }}">
+      <input type="hidden" name="redirect_to" value="{{ toast.redirect_to }}">
+      <button class="undo" type="submit">Undo</button>
+    </form>
+  {% endif %}
+  <button class="dismiss" type="button" aria-label="Dismiss this message">&times;</button>
+</div>

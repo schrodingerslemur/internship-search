@@ -1,10 +1,19 @@
 {% extends "base.html" %}
 {% block title %}{{ job.company_name }} — {{ job.title }}{% endblock %}
 {% block content %}
-<a href="/" class="btn sm">← Back to jobs</a>
+{# The per-user view of this job: their score and their status, never the
+   shared row's. #}
+{% set v = (view or {}).get(job.id) %}
+{% set st = v.status if v else 'new' %}
+{% set jscore = v.score if v else job.relevance_score %}
+
+<a href="/" class="btn sm">← Back to review</a>
 <h1 style="margin-top:14px">{{ job.title }}</h1>
 <div class="sub">
   <strong>{{ job.company_name }}</strong>
+  {% if st != 'new' %}
+    &middot; <span class="state {{ st }}">{{ status_meta(st).icon }} {{ status_meta(st).label }}</span>
+  {% endif %}
   &middot; 📍 {{ job.location_raw or 'Location not listed' }}
   &middot; {{ job.remote_status|humanize }}
   &middot; {{ job.employment_type|humanize }}
@@ -14,22 +23,32 @@
 <div class="split">
   <div>
     <div class="panel" style="margin-bottom:16px">
-      <div class="actions">
-        <a class="btn primary" href="{{ job.application_url }}" target="_blank" rel="noopener">Apply →</a>
-        {% for s in statuses %}
-          {% if s.value in ('saved','applied','assessment','interview','offer','rejected','dismissed') and job.status != s.value %}
-          <form method="post" action="/job/{{ job.id }}/status" style="margin:0">
-            <input type="hidden" name="status" value="{{ s.value }}">
-            <input type="hidden" name="redirect_to" value="/job/{{ job.id }}">
-            <button class="btn sm" type="submit">{{ s.value|humanize }}</button>
-          </form>
-          {% endif %}
-        {% endfor %}
-        <span class="pill">Status: {{ job.status|humanize }}</span>
+      {# The same action bar as the feed, so the primary action and the words on
+         it never differ between the two places you can act on a job. #}
+      {% with current_status = st, asking = (v.awaiting_answer if v else False) %}
+        {% include "partials/job_actions.html" %}
+      {% endwith %}
+      <div class="help" style="margin-top:10px">
+        Apply opens the employer's own application page in a new tab. Nothing is
+        submitted for you &mdash; we ask afterwards whether you actually applied.
       </div>
-      <div class="help" style="margin-top:8px">
-        Apply opens the employer's own application page. Nothing is submitted for you.
-      </div>
+
+      {% if st in ('applied','assessment','interview','offer','rejected') %}
+      <form method="post" action="/job/{{ job.id }}/status" class="stage-form">
+        <label for="stage-{{ job.id }}">Where is this application now?</label>
+        <div class="actions">
+          <select id="stage-{{ job.id }}" name="status">
+            {% for value in ['applied','assessment','interview','offer','rejected'] %}
+              <option value="{{ value }}" {% if st == value %}selected{% endif %}>
+                {{ status_meta(value).label }}</option>
+            {% endfor %}
+          </select>
+          <input type="hidden" name="redirect_to" value="/job/{{ job.id }}">
+          <input type="hidden" name="view" value="applied">
+          <button class="btn" type="submit">Update</button>
+        </div>
+      </form>
+      {% endif %}
     </div>
 
     {% if job.description %}
@@ -84,10 +103,10 @@
   <aside>
     <div class="panel" style="margin-bottom:14px">
       <h3>Match score</h3>
-      <div class="{{ job.relevance_score|score_class }}" style="font-size:34px;font-weight:700">
-        <span class="v">{{ job.relevance_score|round|int }}</span><span style="font-size:15px;color:var(--muted)">/100</span>
+      <div class="{{ jscore|score_class }}" style="font-size:34px;font-weight:700">
+        <span class="v">{{ jscore|round|int }}</span><span style="font-size:15px;color:var(--muted)">/100</span>
       </div>
-      {% set pm = priority_meta(job.priority) %}
+      {% set pm = priority_meta(v.priority if v else job.priority) %}
       <div style="margin:6px 0 12px">{{ pm.emoji }} {{ pm.label }}</div>
       {% for name, comp in (job.score_breakdown or {}).items() %}
         <div style="margin-bottom:7px">
@@ -101,8 +120,9 @@
 
     <div class="panel" style="margin-bottom:14px">
       <h3>Why this is a match</h3>
-      {% if job.match_reasons %}
-        <ul class="clean">{% for r in job.match_reasons %}<li>✓ {{ r }}</li>{% endfor %}</ul>
+      {% set reasons = (v.reasons if v else job.match_reasons) or [] %}
+      {% if reasons %}
+        <ul class="clean">{% for r in reasons %}<li>✓ {{ r }}</li>{% endfor %}</ul>
       {% else %}<p class="sub">No specific reasons recorded.</p>{% endif %}
       {% if job.concerns %}
         <h3 style="margin-top:14px">Why you might skip</h3>

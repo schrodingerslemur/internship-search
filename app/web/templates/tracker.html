@@ -1,47 +1,28 @@
 {% extends "base.html" %}
-{% block title %}Application tracker{% endblock %}
+{% block title %}Application tracker · Internship Search{% endblock %}
 {% block content %}
 <h1>Application tracker</h1>
-<div class="sub">Drag-free Kanban: use the buttons on each card to advance a job.</div>
-
-<div class="stats">
-  <div class="stat"><div class="n">{{ counts.saved }}</div><div class="l">Saved</div></div>
-  <div class="stat"><div class="n">{{ counts.applied }}</div><div class="l">In progress</div></div>
-  <div class="stat"><div class="n">{{ counts.interviews }}</div><div class="l">Interviews</div></div>
-  <div class="stat"><div class="n">{{ counts.offers }}</div><div class="l">Offers</div></div>
+<div class="sub">
+  What happened after you applied. Jobs you haven't decided about yet live in
+  <a href="/">Review</a>; jobs you kept for later are in <a href="/saved">Saved</a>.
 </div>
 
-<div class="kanban">
-  {% for col in columns %}
-    <div class="col">
-      <h4>{{ col.value|humanize }} ({{ board[col.value]|length }})</h4>
-      {% for job in board[col.value] %}
-        <div class="card">
-          <div><strong>{{ job.company_name }}</strong></div>
-          <div><a href="/job/{{ job.id }}">{{ job.title[:58] }}</a></div>
-          <div class="help">
-            {{ job.relevance_score|round|int }}/100 · {{ job.location_raw or 'n/a' }}
-          </div>
-          {% set db = deadline_badge(job) %}
-          {% if db.level in ('urgent','soon') %}
-            <div class="help">{{ db.emoji }} {{ db.text }}</div>
-          {% endif %}
-          <div class="actions" style="margin-top:6px">
-            {% set nxt = {'new':'saved','saved':'applied','applied':'assessment',
-                          'assessment':'interview','interview':'offer'} %}
-            {% if nxt.get(col.value) %}
-            <form method="post" action="/job/{{ job.id }}/status" style="margin:0">
-              <input type="hidden" name="status" value="{{ nxt[col.value] }}">
-              <input type="hidden" name="redirect_to" value="/tracker">
-              <button class="btn sm" type="submit">→ {{ nxt[col.value]|humanize }}</button>
-            </form>
-            {% endif %}
-          </div>
-        </div>
-      {% else %}
-        <div class="help">Empty</div>
-      {% endfor %}
-    </div>
-  {% endfor %}
+<div id="tracker-stats">{% include "partials/tracker_stats.html" %}</div>
+
+{% if counts.applied %}
+{% include "partials/kanban.html" %}
+{% else %}
+<div class="empty">
+  <div class="icon" aria-hidden="true">📋</div>
+  <h2>Nothing to track yet</h2>
+  <p>
+    Once you mark a job as applied it appears here, and you can move it along as
+    you hear back &mdash; assessment, interview, offer.
+  </p>
+  <div class="actions" style="justify-content:center">
+    <a class="btn primary" href="/">Go to review</a>
+    <a class="btn" href="/saved">See saved jobs</a>
+  </div>
 </div>
+{% endif %}
 {% endblock %}

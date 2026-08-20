@@ -1,41 +1,83 @@
+{# One job, as one scannable row.
+
+   Reading order is deliberate: what the job is, then whether it is worth your
+   time, then what you can do about it. Anything that does not help make that
+   decision is left for the detail page. #}
 {% set v = (view or {}).get(job.id) %}
 {% set jscore = v.score if v else job.relevance_score %}
 {% set jpriority = v.priority if v else job.priority %}
-<div class="job {{ 'is-done' if v and v.status in ('applied','dismissed','rejected') else '' }}" id="job-{{ job.id }}">
-  <label class="pick" title="Select">
-    <input type="checkbox" class="job-pick" form="bulk-form" name="job_ids" value="{{ job.id }}">
+{% set st = v.status if v else job.status %}
+<article class="job" id="job-{{ job.id }}"
+         aria-labelledby="job-title-{{ job.id }}">
+  <label class="pick">
+    <input type="checkbox" class="job-pick" form="bulk-form" name="job_ids" value="{{ job.id }}"
+           aria-label="Select {{ job.title }} at {{ job.company_name }}">
   </label>
-  <div class="score {{ jscore|score_class }}">
+
+  <div class="score {{ jscore|score_class }}" title="How well this matches your profile">
     <div class="v">{{ jscore|round|int }}</div>
-    <div class="m">/100</div>
+    <div class="m">match</div>
   </div>
+
   <div class="body">
-    <div class="co">{{ job.company_name }}</div>
-    <div class="ti"><a href="/job/{{ job.id }}">{{ job.title }}</a></div>
+    <h3 class="ti" id="job-title-{{ job.id }}">
+      <a href="/job/{{ job.id }}">{{ job.title }}</a>
+    </h3>
+    <div class="co">
+      {{ job.company_name }}
+      {% if st and st != 'new' %}
+        {# State is spelled out, not just coloured. #}
+        <span class="state {{ st }}">{{ status_meta(st).icon }} {{ status_meta(st).label }}</span>
+      {% endif %}
+      {% if not job.is_active %}
+        <span class="state" title="This posting is no longer listed at the source">⚠ No longer listed</span>
+      {% endif %}
+    </div>
+
     <div class="meta">
       {% set pm = priority_meta(jpriority) %}
       <span>{{ pm.emoji }} {{ pm.label }}</span>
       <span>📍 {{ job.location_raw or 'Location not listed' }}</span>
-      {% if job.date_posted %}<span>🕒 {{ job.date_posted|timeago }}</span>{% endif %}
+      {% if job.remote_status and job.remote_status != 'unknown' %}
+        <span>{{ remote_meta(job.remote_status).icon }} {{ remote_meta(job.remote_status).label }}</span>
+      {% endif %}
+      {% if job.employment_type and job.employment_type != 'unknown' %}
+        <span>💼 {{ job.employment_type|humanize }}</span>
+      {% endif %}
       {% if job.salary_min %}<span>💰 {{ job|salary }}</span>{% endif %}
-      {% if job.source_count > 1 %}
-        <span class="sources" title="{{ job.source_names|join(', ') }}">
-          Found on {{ job.source_count }} sources</span>
-      {% endif %}
-      {% if job.freshness in ('new','updated','reposted') %}
-        <span class="badge {{ job.freshness }}">{{ job.freshness|upper }}</span>
-      {% endif %}
+      {% if job.date_posted %}<span>🕒 Posted {{ job.date_posted|timeago }}</span>
+      {% elif job.date_discovered %}<span>🕒 Found {{ job.date_discovered|timeago }}</span>{% endif %}
       {% set db = deadline_badge(job) %}
       {% if db.level in ('urgent','soon') %}<span>{{ db.emoji }} {{ db.text }}</span>{% endif %}
+      {% if job.freshness in ('new','updated','reposted') and st == 'new' %}
+        <span class="badge {{ job.freshness }}">{{ job.freshness|upper }}</span>
+      {% endif %}
+      {% if job.source_count > 1 %}
+        {# Says out loud that the duplicates were merged, rather than leaving
+           the user to wonder why they are seeing it only once. #}
+        <span class="sources" title="{{ job.source_names|join(', ') }}">
+          Merged from {{ job.source_count }} listings</span>
+      {% endif %}
     </div>
-    {% if (v.reasons if v else job.match_reasons) %}
+
+    {% set reasons = (v.reasons if v else job.match_reasons) or [] %}
+    {% if reasons or job.concerns %}
       <div class="chips">
-        {% for reason in ((v.reasons if v else job.match_reasons) or [])[:5] %}<span class="chip good">✓ {{ reason }}</span>{% endfor %}
-        {% for c in job.concerns[:2] %}<span class="chip warn">⚠ {{ c }}</span>{% endfor %}
+        {% for reason in reasons[:4] %}<span class="chip good">✓ {{ reason }}</span>{% endfor %}
+        {% for c in (job.concerns or [])[:2] %}<span class="chip warn">⚠ {{ c }}</span>{% endfor %}
       </div>
     {% endif %}
+
+    {% if v and v.applied_at %}
+      <div class="when">Applied {{ v.applied_at|timeago }}</div>
+    {% elif v and v.dismissed_at %}
+      <div class="when">Dismissed {{ v.dismissed_at|timeago }}</div>
+    {% elif v and v.saved_at and st == 'saved' %}
+      <div class="when">Saved {{ v.saved_at|timeago }}</div>
+    {% endif %}
   </div>
-  {% with current_status = (v.status if v else job.status) %}
+
+  {% with current_status = st, asking = (v.awaiting_answer if v else False) %}
     {% include "partials/job_actions.html" %}
   {% endwith %}
-</div>
+</article>

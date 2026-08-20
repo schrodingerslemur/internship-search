@@ -106,6 +106,14 @@ class UserJobState(Base, TimestampMixin):
     notified_at: Mapped[datetime | None] = mapped_column(DateTime)
     saved_at: Mapped[datetime | None] = mapped_column(DateTime)
     applied_at: Mapped[datetime | None] = mapped_column(DateTime)
+    #: When this user dismissed the job. Kept after a restore is undone so the
+    #: Dismissed view can order by "most recently discarded" rather than by the
+    #: job's own dates, which say nothing about when you decided.
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    #: When the user last opened the application URL from here. Recorded so the
+    #: card can ask "did you apply?" on the next visit; it is deliberately NOT
+    #: the same thing as having applied.
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     user: Mapped[User] = relationship(back_populates="job_states")
     job: Mapped["Job"] = relationship()  # noqa: F821, UP037 - string ref: Job is in another module

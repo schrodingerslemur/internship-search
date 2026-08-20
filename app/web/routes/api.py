@@ -92,8 +92,16 @@ def _serialize_job(job: Job, *, detail: bool = False) -> dict[str, Any]:
 
 @router.get("/jobs")
 def list_jobs(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
-    """Canonical, deduplicated job list. One row per underlying position."""
-    filters = q.JobFilters.from_query(dict(request.query_params))
+    """Canonical, deduplicated job list. One row per underlying position.
+
+    Unlike the dashboard, this defaults to every lifecycle state: an API client
+    asking for "the jobs" means all of them, and silently omitting the ones the
+    user has applied to would be a surprising thing for a data endpoint to do.
+    Pass ``view=review`` for what the feed shows.
+    """
+    params = dict(request.query_params)
+    params.setdefault("view", "all")
+    filters = q.JobFilters.from_query(params)
     page = q.search_jobs(db, filters, user)
     return {
         "total": page.total,

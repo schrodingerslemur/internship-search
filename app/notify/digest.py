@@ -323,8 +323,13 @@ def build_email_html(
         if selection.jobs
         else ""
     )
+    # The MIME part already declares utf-8, but some clients render the HTML in
+    # a webview that only honours the meta tag -- without it the emoji and the
+    # em-dashes in job titles come through as mojibake.
     return f"""<!doctype html>
-<html><body style="margin:0;padding:0;background:#f4f5f7;">
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f5f7;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 12px;">
 <tr><td align="center">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border-radius:12px;padding:28px 24px;">

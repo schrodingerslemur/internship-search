@@ -147,6 +147,23 @@ def reschedule(scheduler: AsyncIOScheduler, rules: ScheduleRules) -> None:
     )
 
 
+def next_digest_at(scheduler: AsyncIOScheduler | None):
+    """When the next search-and-digest actually runs, in the user's timezone.
+
+    The dashboard promises "we will look again at ..."; that promise has to come
+    from the live scheduler rather than from the saved settings, because a
+    schedule that failed to apply would otherwise still be advertised.
+    """
+    if scheduler is None:
+        return None
+    times = [
+        job.next_run_time
+        for job_id in (MORNING_JOB_ID, AFTERNOON_JOB_ID)
+        if (job := scheduler.get_job(job_id)) is not None and job.next_run_time
+    ]
+    return min(times) if times else None
+
+
 def describe_jobs(scheduler: AsyncIOScheduler | None) -> list[dict[str, str]]:
     if scheduler is None:
         return []

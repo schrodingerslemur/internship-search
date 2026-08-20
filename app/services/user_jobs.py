@@ -31,6 +31,13 @@ ACTED_ON: frozenset[str] = frozenset(
     }
 )
 
+#: What the primary feed shows. A job you have not decided about yet, plus one
+#: you deliberately kept: saving is a bookmark, not a disposal, so a saved job
+#: stays in front of you until you apply or dismiss it.
+NEEDS_REVIEW: frozenset[str] = frozenset(
+    {JobStatus.NEW.value, JobStatus.SAVED.value}
+)
+
 #: Statuses that survive the staleness sweep: your application history must
 #: outlive the posting it refers to.
 PROTECTED_FROM_EXPIRY: frozenset[str] = frozenset(
@@ -75,6 +82,31 @@ def states_for(session: Session, user: User, job_ids: list[int]) -> dict[int, Us
     return {row.job_id: row for row in rows}
 
 
+#: status -> the column recording when it was first reached. First reached, not
+#: last: "applied on the 3rd" must not become "applied today" because the row
+#: was touched again.
+STATUS_TIMESTAMP: dict[str, str] = {
+    JobStatus.SAVED.value: "saved_at",
+    JobStatus.APPLIED.value: "applied_at",
+    JobStatus.DISMISSED.value: "dismissed_at",
+}
+
+
+def stamp_status(state: UserJobState, status: str, now: datetime) -> None:
+    """Set the status and its arrival timestamp on an already-loaded row.
+
+    Returning a job to NEW is a restore, and a restore must genuinely undo the
+    dismissal: leaving ``dismissed_at`` set would keep the job in the Dismissed
+    list forever, which is the one thing undo has to fix.
+    """
+    state.status = status
+    if status == JobStatus.NEW.value:
+        state.dismissed_at = None
+    field = STATUS_TIMESTAMP.get(status)
+    if field and getattr(state, field, None) is None:
+        setattr(state, field, now)
+
+
 def set_status(
     session: Session,
     user: User,
@@ -86,11 +118,21 @@ def set_status(
     """Record what this user has decided about this job."""
     now = now or utcnow()
     state = get_or_create_state(session, user, job)
-    state.status = status
-    if status == JobStatus.SAVED.value and state.saved_at is None:
-        state.saved_at = now
-    if status == JobStatus.APPLIED.value and state.applied_at is None:
-        state.applied_at = now
+    stamp_status(state, status, now)
+    session.flush()
+    return state
+
+
+def mark_opened(
+    session: Session, user: User, job: Job, *, now: datetime | None = None
+) -> UserJobState:
+    """Note that the user opened the application page -- nothing more.
+
+    Opening a posting is not applying to it, and the status is left exactly as
+    it was. All this buys is the right to ask "did you apply?" afterwards.
+    """
+    state = get_or_create_state(session, user, job)
+    state.opened_at = now or utcnow()
     session.flush()
     return state
 
@@ -217,20 +259,28 @@ def view_for(session: Session, user: User, jobs: list[Job]) -> dict[int, dict]:
     shared row happens to hold, and it must do so without a query per card.
     """
     states = states_for(session, user, [j.id for j in jobs])
-    return {
-        job.id: {
-            "score": score_of(states.get(job.id), job),
-            "priority": priority_of(states.get(job.id), job),
-            "status": status_of(states.get(job.id)),
-            "reasons": (
-                (states.get(job.id).match_reasons if states.get(job.id) else None)
-                or job.match_reasons
-                or []
+
+    def entry(job: Job) -> dict:
+        state = states.get(job.id)
+        return {
+            "score": score_of(state, job),
+            "priority": priority_of(state, job),
+            "status": status_of(state),
+            "reasons": (state.match_reasons if state else None) or job.match_reasons or [],
+            "notified": bool(state.notified) if state else False,
+            "saved_at": state.saved_at if state else None,
+            "applied_at": state.applied_at if state else None,
+            "dismissed_at": state.dismissed_at if state else None,
+            # Opened but still undecided: the card asks whether it went through
+            # rather than guessing from the click.
+            "awaiting_answer": bool(
+                state
+                and state.opened_at
+                and state.status in NEEDS_REVIEW
             ),
-            "notified": bool(states.get(job.id).notified) if states.get(job.id) else False,
         }
-        for job in jobs
-    }
+
+    return {job.id: entry(job) for job in jobs}
 
 
 def bulk_set_status(
@@ -256,11 +306,7 @@ def bulk_set_status(
             session.add(state)
         if state.status == status:
             continue
-        state.status = status
-        if status == JobStatus.SAVED.value and state.saved_at is None:
-            state.saved_at = now
-        if status == JobStatus.APPLIED.value and state.applied_at is None:
-            state.applied_at = now
+        stamp_status(state, status, now)
         changed += 1
 
     session.flush()

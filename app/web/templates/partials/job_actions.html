@@ -1,27 +1,103 @@
-{# `current_status` is this user's state; falls back to the shared row only
-   when a caller has not resolved it. #}
+{# The action bar for one job.
+
+   Exactly one primary action per state, so there is never a question about what
+   to do next. Everything reversible is done in a single click and confirmed
+   with an undoable toast; nothing here opens a dialog.
+
+   `current_status` is this user's state; `asking` means they opened the
+   application and have not yet said whether they submitted one. #}
 {% set st = current_status if current_status is defined else job.status %}
+{% set vw = active_view|default('review') %}
+{% set back = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
+
 <div class="actions" id="actions-{{ job.id }}">
-  <a class="btn primary sm" href="{{ job.application_url }}" target="_blank" rel="noopener">Apply</a>
+{% if asking|default(false) %}
+  {# Opening a posting is not the same as applying to it, so we ask rather
+     than assume. Until it is answered the job keeps its previous status. #}
+  <div class="asking">
+    <span class="q" id="ask-{{ job.id }}">Did you apply?</span>
+    <form method="post" action="/job/{{ job.id }}/status"
+          hx-post="/job/{{ job.id }}/status" hx-target="#job-{{ job.id }}" hx-swap="outerHTML" hx-disabled-elt="find button"
+          style="margin:0">
+      <input type="hidden" name="status" value="applied">
+      <input type="hidden" name="view" value="{{ vw }}">
+      <input type="hidden" name="redirect_to" value="{{ back }}">
+      <button class="btn primary sm" type="submit" aria-describedby="ask-{{ job.id }}">Yes, mark applied</button>
+    </form>
+    <form method="post" action="/job/{{ job.id }}/not-applied"
+          hx-post="/job/{{ job.id }}/not-applied" hx-target="#actions-{{ job.id }}" hx-swap="outerHTML" hx-disabled-elt="find button"
+          style="margin:0">
+      <input type="hidden" name="view" value="{{ vw }}">
+      <button class="btn sm" type="submit" aria-describedby="ask-{{ job.id }}">Not yet</button>
+    </form>
+  </div>
+
+{% elif st == 'dismissed' %}
+  {# A dismissal is never a dead end: the way back is the primary action here. #}
+  <form method="post" action="/job/{{ job.id }}/status"
+        hx-post="/job/{{ job.id }}/status" hx-target="#job-{{ job.id }}" hx-swap="outerHTML"
+        hx-disabled-elt="find button" style="margin:0">
+    <input type="hidden" name="status" value="new">
+    <input type="hidden" name="view" value="{{ vw }}">
+    <input type="hidden" name="redirect_to" value="{{ back }}">
+    <button class="btn primary sm" type="submit">Restore to review</button>
+  </form>
   <a class="btn sm" href="/job/{{ job.id }}">Details</a>
-  {% if st != 'saved' %}
-  <form method="post" action="/job/{{ job.id }}/status" hx-post="/job/{{ job.id }}/status" hx-target="#actions-{{ job.id }}" hx-swap="outerHTML" style="margin:0">
-    <input type="hidden" name="status" value="saved">
-    <button class="btn sm" type="submit">Save</button>
-  </form>
-  {% endif %}
-  {% if st != 'applied' %}
-  <form method="post" action="/job/{{ job.id }}/status" hx-post="/job/{{ job.id }}/status" hx-target="#actions-{{ job.id }}" hx-swap="outerHTML" style="margin:0">
-    <input type="hidden" name="status" value="applied">
-    <button class="btn sm" type="submit">Mark applied</button>
-  </form>
-  {% endif %}
-  {% if st != 'dismissed' %}
-  <form method="post" action="/job/{{ job.id }}/status" hx-post="/job/{{ job.id }}/status" hx-target="#actions-{{ job.id }}" hx-swap="outerHTML" style="margin:0">
-    <input type="hidden" name="status" value="dismissed">
-    <button class="btn sm" type="submit">Dismiss</button>
-  </form>
+
+{% else %}
+  {% if st in ('applied','assessment','interview','offer','rejected') %}
+    {# Already applied: the useful actions are revisiting the posting and
+       tracking what happened next, not applying again. #}
+    <a class="btn sm" href="{{ job.application_url }}" target="_blank" rel="noopener">
+      Open posting <span aria-hidden="true">↗</span></a>
+    <a class="btn sm" href="/tracker">Update status</a>
+    <form method="post" action="/job/{{ job.id }}/status"
+          hx-post="/job/{{ job.id }}/status" hx-target="#job-{{ job.id }}" hx-swap="outerHTML" hx-disabled-elt="find button"
+          style="margin:0">
+      <input type="hidden" name="status" value="new">
+      <input type="hidden" name="view" value="{{ vw }}">
+      <input type="hidden" name="redirect_to" value="{{ back }}">
+      <button class="btn sm" type="submit" title="I did not actually apply to this">Not applied</button>
+    </form>
   {% else %}
-    <span class="pill">Dismissed</span>
+    {# The one thing to do with a job you have not dealt with yet. The link is
+       a real link -- the browser opens the tab -- and the click is reported
+       separately so the card can follow up. #}
+    <a class="btn primary sm" href="{{ job.application_url }}" target="_blank" rel="noopener"
+       data-record-open="/job/{{ job.id }}/opened"
+       data-record-target="#actions-{{ job.id }}"
+       data-record-view="{{ vw }}">Apply <span aria-hidden="true">↗</span></a>
+
+    {% if st == 'saved' %}
+      <form method="post" action="/job/{{ job.id }}/status"
+            hx-post="/job/{{ job.id }}/status" hx-target="#job-{{ job.id }}" hx-swap="outerHTML" hx-disabled-elt="find button"
+            style="margin:0">
+        <input type="hidden" name="status" value="new">
+        <input type="hidden" name="view" value="{{ vw }}">
+        <input type="hidden" name="redirect_to" value="{{ back }}">
+        <button class="btn sm" type="submit" title="Remove from Saved">Unsave</button>
+      </form>
+    {% else %}
+      <form method="post" action="/job/{{ job.id }}/status"
+            hx-post="/job/{{ job.id }}/status" hx-target="#job-{{ job.id }}" hx-swap="outerHTML" hx-disabled-elt="find button"
+            style="margin:0">
+        <input type="hidden" name="status" value="saved">
+        <input type="hidden" name="view" value="{{ vw }}">
+        <input type="hidden" name="redirect_to" value="{{ back }}">
+        <button class="btn sm" type="submit" title="Keep this for later">Save</button>
+      </form>
+    {% endif %}
+
+    <form method="post" action="/job/{{ job.id }}/status"
+          hx-post="/job/{{ job.id }}/status" hx-target="#job-{{ job.id }}" hx-swap="outerHTML" hx-disabled-elt="find button"
+          style="margin:0">
+      <input type="hidden" name="status" value="dismissed">
+      <input type="hidden" name="view" value="{{ vw }}">
+      <input type="hidden" name="redirect_to" value="{{ back }}">
+      <button class="btn sm" type="submit" title="Hide this and stop emailing it">Dismiss</button>
+    </form>
+
+    <a class="btn sm" href="/job/{{ job.id }}">Details</a>
   {% endif %}
+{% endif %}
 </div>

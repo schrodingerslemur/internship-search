@@ -27,11 +27,40 @@ from app.models import (
 )
 from app.models.base import JobStatus, Priority, utcnow
 
+#: The four destinations in the navigation, expressed as the set of per-user
+#: statuses each one contains. A job belongs to exactly one of them at a time,
+#: which is what makes "where did that job go?" answerable.
+VIEWS: dict[str, frozenset[str]] = {
+    # The feed. Undecided work, plus jobs kept for later -- never anything the
+    # user has already finished with.
+    "review": frozenset({JobStatus.NEW.value, JobStatus.SAVED.value}),
+    "saved": frozenset({JobStatus.SAVED.value}),
+    "applied": frozenset(
+        {
+            JobStatus.APPLIED.value,
+            JobStatus.ASSESSMENT.value,
+            JobStatus.INTERVIEW.value,
+            JobStatus.OFFER.value,
+            JobStatus.REJECTED.value,
+        }
+    ),
+    "dismissed": frozenset({JobStatus.DISMISSED.value}),
+}
+
+#: Views whose whole purpose is history, so an expired or delisted posting must
+#: still show: "I applied to that" does not stop being true when it closes.
+HISTORY_VIEWS: frozenset[str] = frozenset({"applied", "dismissed"})
+
+DEFAULT_VIEW = "review"
+
 
 @dataclass
 class JobFilters:
     """Every filter the dashboard exposes."""
 
+    #: Which of VIEWS to show. Not a filter the user tweaks -- it is the page
+    #: they are on, which is why it is kept out of the filter chips.
+    view: str = DEFAULT_VIEW
     q: str | None = None
     min_score: float | None = None
     max_score: float | None = None
@@ -75,7 +104,12 @@ class JobFilters:
             except ValueError:
                 return None
 
+        view = s("view") or DEFAULT_VIEW
+        if view not in VIEWS and view != "all":
+            view = DEFAULT_VIEW
+
         return cls(
+            view=view,
             q=s("q"),
             min_score=f("min_score"),
             max_score=f("max_score"),
@@ -93,7 +127,9 @@ class JobFilters:
             include_inactive=str(params.get("include_inactive", "")).lower() in ("1", "true", "on"),
             include_dismissed=str(params.get("include_dismissed", "")).lower()
             in ("1", "true", "on"),
-            sort=s("sort") or "score",
+            # A history page defaults to "most recent first"; the feed defaults
+            # to "best match first". Either is overridden by an explicit sort.
+            sort=s("sort") or VIEW_DEFAULT_SORT.get(view, "score"),
             page=max(1, i("page") or 1),
             per_page=min(100, max(1, i("per_page") or 25)),
         )
@@ -102,6 +138,8 @@ class JobFilters:
         from urllib.parse import urlencode
 
         data: dict[str, Any] = {}
+        if self.view and self.view != DEFAULT_VIEW:
+            data["view"] = self.view
         for name in (
             "q", "min_score", "max_score", "company", "location", "role", "priority",
             "status", "source", "skill", "remote", "posted_within_days",
@@ -118,6 +156,60 @@ class JobFilters:
             data["include_dismissed"] = "1"
         data.update({k: v for k, v in overrides.items() if v is not None})
         return urlencode(data)
+
+    #: Filters worth showing back to the user as removable chips, with the
+    #: wording used on screen. Paging and sorting are deliberately absent --
+    #: they are not reasons a job is missing from the list.
+    CHIP_LABELS = (
+        ("q", "Search"),
+        ("priority", "Priority"),
+        ("company", "Company"),
+        ("location", "Location"),
+        ("role", "Role"),
+        ("skill", "Skill"),
+        ("source", "Source"),
+        ("remote", "Arrangement"),
+        ("status", "Status"),
+        ("min_score", "Min match"),
+        ("max_score", "Max match"),
+        ("posted_within_days", "Posted within"),
+        ("deadline_within_days", "Deadline within"),
+    )
+
+    def active_chips(self) -> list[dict[str, str]]:
+        """Every filter currently narrowing the list, and how to drop it.
+
+        A job vanishing with no visible explanation is the worst failure a
+        filtered list can have, so the explanation is always on screen.
+        """
+        chips = []
+        for name, label in self.CHIP_LABELS:
+            value = getattr(self, name)
+            if value in (None, ""):
+                continue
+            if name == "posted_within_days":
+                shown = f"last {value} days"
+            elif name == "deadline_within_days":
+                shown = f"next {value} days"
+            else:
+                shown = str(value).replace("_", " ")
+            chips.append({"name": name, "label": label, "value": shown,
+                          "without": self.without(name)})
+        if self.has_salary:
+            chips.append({"name": "has_salary", "label": "Salary", "value": "listed",
+                          "without": self.without("has_salary")})
+        return chips
+
+    def without(self, name: str) -> str:
+        """This same query with one filter removed, as a query string."""
+        from dataclasses import replace
+
+        blank = False if name == "has_salary" else None
+        return replace(self, **{name: blank, "page": 1}).to_query_string()
+
+    @property
+    def is_filtered(self) -> bool:
+        return bool(self.active_chips())
 
 
 def _user_status(user: User | None):
@@ -137,21 +229,58 @@ def _user_status(user: User | None):
     )
 
 
+def _user_column(user: User | None, column, fallback):
+    """This user's value for a scored column, falling back to the shared one.
+
+    The card shows the user's own score, so the score filter and the sort have
+    to agree with it. Filtering on ``jobs.relevance_score`` while displaying the
+    per-user number is exactly the "why did that job vanish?" bug the feed must
+    not have.
+    """
+    if user is None:
+        return fallback
+    per_user = (
+        select(column)
+        .where(UserJobState.job_id == Job.id, UserJobState.user_id == user.id)
+        .correlate(Job)
+        .scalar_subquery()
+    )
+    return func.coalesce(per_user, fallback)
+
+
+def effective_score(user: User | None):
+    return _user_column(user, UserJobState.relevance_score, Job.relevance_score)
+
+
+def effective_priority(user: User | None):
+    return _user_column(user, UserJobState.priority, Job.priority)
+
+
 def apply_filters(
     stmt: Select, filters: JobFilters, *, now: datetime | None = None, user: User | None = None
 ) -> Select:
     now = now or utcnow()
 
-    if not filters.include_inactive:
+    # History views keep delisted postings: your record of having applied does
+    # not disappear because the company took the ad down.
+    if not filters.include_inactive and filters.view not in HISTORY_VIEWS:
         stmt = stmt.where(Job.is_active.is_(True))
+
     status_expr = _user_status(user)
-    if not filters.include_dismissed and filters.status != JobStatus.DISMISSED.value:
-        if status_expr is not None:
-            stmt = stmt.where(
-                func.coalesce(status_expr, JobStatus.NEW.value) != JobStatus.DISMISSED.value
-            )
-        else:
-            stmt = stmt.where(Job.status != JobStatus.DISMISSED.value)
+    status_col = (
+        func.coalesce(status_expr, JobStatus.NEW.value)
+        if status_expr is not None
+        else Job.status
+    )
+    score_col = effective_score(user)
+
+    # The view decides which statuses belong on this page. `include_dismissed`
+    # survives for the JSON API, where there are no pages to navigate between.
+    wanted = VIEWS.get(filters.view)
+    if wanted is not None and not filters.include_dismissed:
+        stmt = stmt.where(status_col.in_(sorted(wanted)))
+    elif not filters.include_dismissed and filters.status != JobStatus.DISMISSED.value:
+        stmt = stmt.where(status_col != JobStatus.DISMISSED.value)
 
     if filters.q:
         like = f"%{filters.q.lower()}%"
@@ -163,9 +292,9 @@ def apply_filters(
             )
         )
     if filters.min_score is not None:
-        stmt = stmt.where(Job.relevance_score >= filters.min_score)
+        stmt = stmt.where(score_col >= filters.min_score)
     if filters.max_score is not None:
-        stmt = stmt.where(Job.relevance_score <= filters.max_score)
+        stmt = stmt.where(score_col <= filters.max_score)
     if filters.company:
         stmt = stmt.where(func.lower(Job.company_name).like(f"%{filters.company.lower()}%"))
     if filters.location:
@@ -173,12 +302,9 @@ def apply_filters(
     if filters.role:
         stmt = stmt.where(func.lower(Job.title).like(f"%{filters.role.lower()}%"))
     if filters.priority:
-        stmt = stmt.where(Job.priority == filters.priority)
+        stmt = stmt.where(effective_priority(user) == filters.priority)
     if filters.status:
-        if status_expr is not None:
-            stmt = stmt.where(func.coalesce(status_expr, JobStatus.NEW.value) == filters.status)
-        else:
-            stmt = stmt.where(Job.status == filters.status)
+        stmt = stmt.where(status_col == filters.status)
     if filters.remote:
         stmt = stmt.where(Job.remote_status == filters.remote)
     if filters.skill:
@@ -205,16 +331,44 @@ def apply_filters(
     return stmt
 
 
-def _order(stmt: Select, sort: str) -> Select:
+#: Default ordering per view. A history page is a diary: the thing you did most
+#: recently belongs at the top, not the thing that scores best.
+VIEW_DEFAULT_SORT: dict[str, str] = {
+    "saved": "saved",
+    "applied": "applied",
+    "dismissed": "dismissed",
+}
+
+#: sort key -> the UserJobState column it orders by.
+_ACTIVITY_SORTS: dict[str, str] = {
+    "saved": "saved_at",
+    "applied": "applied_at",
+    "dismissed": "dismissed_at",
+}
+
+
+def _order(stmt: Select, sort: str, user: User | None = None) -> Select:
+    score = effective_score(user)
+
+    activity = _ACTIVITY_SORTS.get(sort)
+    if activity and user is not None:
+        when = (
+            select(getattr(UserJobState, activity))
+            .where(UserJobState.job_id == Job.id, UserJobState.user_id == user.id)
+            .correlate(Job)
+            .scalar_subquery()
+        )
+        return stmt.order_by(when.desc().nullslast(), score.desc())
+
     if sort == "date":
-        return stmt.order_by(Job.date_posted.desc().nullslast(), Job.relevance_score.desc())
+        return stmt.order_by(Job.date_posted.desc().nullslast(), score.desc())
     if sort == "deadline":
-        return stmt.order_by(Job.deadline.asc().nullslast(), Job.relevance_score.desc())
+        return stmt.order_by(Job.deadline.asc().nullslast(), score.desc())
     if sort == "company":
-        return stmt.order_by(Job.company_name.asc(), Job.relevance_score.desc())
+        return stmt.order_by(Job.company_name.asc(), score.desc())
     if sort == "discovered":
         return stmt.order_by(Job.date_discovered.desc().nullslast())
-    return stmt.order_by(Job.relevance_score.desc(), Job.date_posted.desc().nullslast())
+    return stmt.order_by(score.desc(), Job.date_posted.desc().nullslast())
 
 
 @dataclass
@@ -240,46 +394,64 @@ class JobPage:
 def search_jobs(session: Session, filters: JobFilters, user: User | None = None) -> JobPage:
     base = apply_filters(select(Job), filters, user=user)
     total = session.scalar(select(func.count()).select_from(base.subquery())) or 0
-    stmt = _order(base, filters.sort)
+    stmt = _order(base, filters.sort, user)
     stmt = stmt.offset((filters.page - 1) * filters.per_page).limit(filters.per_page)
     jobs = list(session.scalars(stmt).unique().all())
     return JobPage(jobs=jobs, total=total, page=filters.page, per_page=filters.per_page)
 
 
+def count_jobs(session: Session, filters: JobFilters, user: User | None = None) -> int:
+    """How many jobs match, without fetching a page of them.
+
+    An action needs this to keep "showing 12 of 34" honest, and nothing else
+    from the query -- so it does not pay for the rows.
+    """
+    base = apply_filters(select(Job), filters, user=user)
+    return session.scalar(select(func.count()).select_from(base.subquery())) or 0
+
+
 def dashboard_counts(session: Session, user: User | None = None) -> dict[str, int]:
-    """Headline counters for the dashboard header."""
+    """Headline counters for the dashboard header.
+
+    Every number here answers a question the user actually has -- how much is
+    left to review, what is urgent, where did the rest go -- and each one is a
+    link to the list it counts. A counter you cannot act on is decoration.
+    """
     now = utcnow()
-    today = now - timedelta(days=1)
+    since_yesterday = now - timedelta(days=1)
 
     def count(*conditions) -> int:
-        stmt = select(func.count(Job.id)).where(*conditions)
-        return session.scalar(stmt) or 0
+        return session.scalar(select(func.count(Job.id)).where(*conditions)) or 0
 
     active = Job.is_active.is_(True)
     status_expr = _user_status(user)
-    if status_expr is not None:
-        status_col = func.coalesce(status_expr, JobStatus.NEW.value)
-    else:
-        status_col = Job.status
-    not_dismissed = status_col != JobStatus.DISMISSED.value
+    status_col = (
+        func.coalesce(status_expr, JobStatus.NEW.value)
+        if status_expr is not None
+        else Job.status
+    )
+    priority_col = effective_priority(user)
+
+    in_review = status_col.in_(sorted(VIEWS["review"]))
+    unreviewed = status_col == JobStatus.NEW.value
+
     return {
-        "apply_now": count(active, not_dismissed, Job.priority == Priority.APPLY_NOW.value),
-        "strong": count(active, not_dismissed, Job.priority == Priority.STRONG_MATCH.value),
-        "new_today": count(active, not_dismissed, Job.date_discovered >= today),
+        # The feed, and the two slices of it that deserve attention first.
+        "to_review": count(active, in_review),
+        "new": count(active, unreviewed),
+        "apply_now": count(active, in_review, priority_col == Priority.APPLY_NOW.value),
+        "strong": count(active, in_review, priority_col == Priority.STRONG_MATCH.value),
+        # "Since yesterday" beats "today": at 09:00 a calendar-day counter reads
+        # zero however good last night's run was.
+        "new_since_yesterday": count(active, unreviewed, Job.date_discovered >= since_yesterday),
+        # Where everything else went. Not filtered by is_active -- history does
+        # not shrink when a posting closes.
         "saved": count(status_col == JobStatus.SAVED.value),
-        "applied": count(
-            status_col.in_(
-                [
-                    JobStatus.APPLIED.value,
-                    JobStatus.ASSESSMENT.value,
-                    JobStatus.INTERVIEW.value,
-                    JobStatus.OFFER.value,
-                ]
-            )
-        ),
-        "total_active": count(active, not_dismissed),
+        "applied": count(status_col.in_(sorted(VIEWS["applied"]))),
+        "dismissed": count(status_col == JobStatus.DISMISSED.value),
         "interviews": count(status_col == JobStatus.INTERVIEW.value),
         "offers": count(status_col == JobStatus.OFFER.value),
+        "total_active": count(active, status_col != JobStatus.DISMISSED.value),
     }
 
 
