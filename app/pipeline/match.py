@@ -390,6 +390,52 @@ def classify_priority(score: float, prefs: SearchPreferences) -> Priority:
     return Priority.SKIP
 
 
+#: The two components that decide whether this is the right *kind* of job.
+RELEVANCE_COMPONENTS: tuple[str, ...] = ("role_match", "technical_skills")
+
+#: How much of a relevant job's score survives poor context. Everything outside
+#: RELEVANCE_COMPONENTS -- location, freshness, constraints, fit, company --
+#: describes how good a *relevant* job is, so it scales the result instead of
+#: adding to it. Adding it produced a floor of roughly 32 points on every job,
+#: including ones with no role or skill match at all, which squeezed the entire
+#: corpus into 30-60 and made an absolute score threshold meaningless.
+CONTEXT_FLOOR = 0.55
+
+
+def _blend(components: dict[str, ComponentScore], weights: dict[str, float]) -> float:
+    """Combine components so context modulates relevance rather than replacing it.
+
+    A perfect role and skill match in mediocre context still scores well. A job
+    that matches neither cannot be rescued by being nearby, recent and an
+    internship -- which is exactly what the previous additive blend allowed.
+    """
+    relevance_weight = sum(weights.get(name, 0.0) for name in RELEVANCE_COMPONENTS)
+    context_weight = sum(
+        weight for name, weight in weights.items() if name not in RELEVANCE_COMPONENTS
+    )
+
+    if relevance_weight <= 0:
+        # The user has weighted relevance out entirely; respect that literally.
+        return sum(component.weighted for component in components.values())
+
+    relevance = (
+        sum(components[name].weighted for name in RELEVANCE_COMPONENTS if name in components)
+        / relevance_weight
+    )
+    if context_weight <= 0:
+        return relevance
+
+    context = (
+        sum(
+            component.weighted
+            for name, component in components.items()
+            if name not in RELEVANCE_COMPONENTS
+        )
+        / context_weight
+    )
+    return relevance * (CONTEXT_FLOOR + (1.0 - CONTEXT_FLOOR) * (context / 100.0))
+
+
 def score_job(
     job: NormalizedJob,
     prefs: SearchPreferences,
@@ -426,7 +472,7 @@ def score_job(
     for name, component in components.items():
         component.weight = weights.get(name, 0.0)
 
-    total = sum(component.weighted for component in components.values())
+    total = _blend(components, weights)
 
     # Negative keywords deduct after weighting, so a single bad signal cannot
     # be hidden by strong components elsewhere.

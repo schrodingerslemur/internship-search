@@ -193,6 +193,30 @@ so the dashboard can always explain the number:
 | Internship constraints | 10% |
 | Company preference | 5% |
 
+### Relevance gates; context modulates
+
+The seven components are not simply added. Two of them — role match and
+technical skills — decide whether this is the right *kind* of job. The other
+five describe how good a *relevant* job is, so they scale the result rather
+than adding to it:
+
+```
+score = relevance × (0.55 + 0.45 × context/100)
+```
+
+Adding them instead gave every posting a floor of roughly 32 points from
+components that barely vary across a corpus (an internship is an internship; a
+location is usually fine). A job matching neither the role nor a single skill
+still scored ~35, which squeezed 5,000 real postings into the 30–60 band and
+made an absolute threshold meaningless. Worse, it mis-ranked: a generic "AI
+Software Engineer Intern" outscored an "RTL Intern" for a hardware profile,
+because being recent and nearby outweighed being the wrong job.
+
+Under the gate the same corpus spreads across 0–95, and the ordering matches
+the profile: FPGA and computer-architecture roles at the top, generic software
+and quant roles well below. Absence of evidence stays neutral rather than
+negative — a posting with no extractable skills is not punished for it.
+
 Weights are normalised, so custom values need not sum to 100. Priority bands
 (`🔥 Apply now` ≥ 90, `⭐ Strong match` ≥ 80, `👍 Worth considering` ≥ 70,
 `🟡 Maybe` ≥ 60) are configurable.

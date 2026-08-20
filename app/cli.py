@@ -114,6 +114,57 @@ async def _cmd_seed(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_rescore(args: argparse.Namespace) -> int:
+    """Re-score every stored job, for every account.
+
+    Needed after a change to the scoring model: jobs already in the database
+    keep whatever score they were given at the time, and a corpus split across
+    two scales makes every threshold meaningless.
+    """
+    from sqlalchemy import select
+
+    from app.db import session_scope
+    from app.models import Job
+    from app.pipeline.match import score_job
+    from app.schemas.job import normalized_from_job_row
+    from app.services import user_jobs
+    from app.services.preferences import all_active_users, load_preferences, load_profile
+
+    with session_scope() as session:
+        jobs = list(session.scalars(select(Job).where(Job.is_active.is_(True))).all())
+        print(f"Re-scoring {len(jobs)} active jobs")
+
+        # The shared fallback, used for accounts that have never been scored
+        # against a job -- keep it on the same scale as everything else.
+        prefs, profile = load_preferences(session), load_profile(session)
+        shared = 0
+        for job in jobs:
+            try:
+                result = score_job(normalized_from_job_row(job), prefs, profile)
+            except Exception:
+                continue
+            job.relevance_score = result.score
+            job.priority = str(result.priority)
+            job.match_reasons = result.match_reasons
+            job.concerns = result.concerns
+            job.score_breakdown = result.breakdown()
+            shared += 1
+        session.flush()
+        print(f"  shared scores updated : {shared}")
+
+        for user in all_active_users(session):
+            scored = user_jobs.score_jobs_for_user(
+                session,
+                user,
+                jobs,
+                load_preferences(session, user=user),
+                load_profile(session, user=user),
+            )
+            print(f"  {user.email or user.id}: {scored} scored")
+
+    return 0
+
+
 async def _cmd_notify_test(args: argparse.Namespace) -> int:
     from app.db import session_scope
     from app.notify.engine import send_test_notification
@@ -210,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("stats", help="print database statistics")
 
+    sub.add_parser("rescore", help="re-score every stored job (after a scoring change)")
+
     p_serve = sub.add_parser("serve", help="run the web dashboard")
     p_serve.add_argument("--host", default=None)
     p_serve.add_argument("--port", type=int, default=None)
@@ -224,6 +277,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_cmd_seed(args))
     if args.command == "notify-test":
         return asyncio.run(_cmd_notify_test(args))
+    if args.command == "rescore":
+        return _cmd_rescore(args)
     if args.command == "stats":
         return _cmd_stats(args)
     if args.command == "serve":

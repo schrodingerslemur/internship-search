@@ -251,3 +251,106 @@ class TestQueryGeneration:
     def test_empty_roles_still_yields_a_query(self, prefs):
         prefs.roles = []
         assert generate_queries(prefs)
+
+
+class TestRelevanceGating:
+    """Context modulates relevance; it must never manufacture it.
+
+    The additive blend gave every job a floor of roughly 32 points from
+    location, freshness, constraints and fit -- components that are near
+    constant across a corpus. A job matching neither the role nor a single
+    skill still scored ~35, which squeezed 5,000 real postings into 30-60 and
+    made an absolute threshold meaningless.
+    """
+
+    def _score(self, prefs, profile, **kwargs):
+        from app.pipeline.match import score_job
+        from app.pipeline.normalize import normalize_job
+
+        job = normalize_job(make_raw(**kwargs))
+        return score_job(job, prefs, profile, now=NOW).score
+
+    def test_perfect_context_cannot_close_the_gap_on_relevance(self, prefs, profile):
+        """Nearby, recent and an internship -- but the wrong job entirely.
+
+        Asserted as a gap rather than an absolute, because a posting with no
+        extractable skills is scored *neutrally*, not at zero: absence of
+        evidence is never treated as evidence of a poor match.
+        """
+        irrelevant_but_ideal_context = self._score(
+            prefs,
+            profile,
+            title="Marketing Communications Intern",
+            description="Social media campaigns, copywriting and brand storytelling.",
+            location="Pittsburgh, PA",
+            days_ago=0,
+        )
+        relevant_but_awkward = self._score(
+            prefs,
+            profile,
+            title="FPGA Design Intern",
+            description="SystemVerilog RTL design, FPGA prototyping, Verilog, timing analysis.",
+            location="Reykjavik, Iceland",
+            days_ago=200,
+        )
+        assert relevant_but_awkward > irrelevant_but_ideal_context, (
+            f"context beat relevance: {relevant_but_awkward} vs {irrelevant_but_ideal_context}"
+        )
+
+    def test_a_relevant_job_in_poor_context_still_scores_well(self, prefs, profile):
+        """A great match must survive being far away and undated."""
+        score = self._score(
+            prefs,
+            profile,
+            title="FPGA Design Intern",
+            description=(
+                "SystemVerilog RTL design, FPGA prototyping, timing analysis and "
+                "pre-silicon verification for our silicon engineering team."
+            ),
+            location="Reykjavik, Iceland",
+            days_ago=200,  # stale, so freshness contributes nothing
+        )
+        assert score > 45, f"strong match in poor context scored {score}"
+
+    def test_relevance_outranks_context(self, prefs, profile):
+        """The failure this fixes: a generic local job beating a specialist one."""
+        specialist = self._score(
+            prefs,
+            profile,
+            title="FPGA Design Intern",
+            description="SystemVerilog RTL, FPGA prototyping, timing closure, Vivado.",
+            location="Remote",
+        )
+        generic = self._score(
+            prefs,
+            profile,
+            title="General Business Intern",
+            description="Support various teams across the organisation.",
+            location="Pittsburgh, PA",
+        )
+        assert specialist > generic + 25, f"{specialist} vs {generic}"
+
+    def test_the_scale_actually_spreads(self, prefs, profile):
+        """Best and worst must be far apart, or no threshold can separate them."""
+        best = self._score(
+            prefs,
+            profile,
+            title="FPGA Design Intern",
+            description="SystemVerilog RTL design, FPGA prototyping, Verilog, timing analysis.",
+            location="Santa Clara, CA",
+        )
+        worst = self._score(
+            prefs,
+            profile,
+            title="Retail Sales Associate Intern",
+            description="Customer service and merchandising in store.",
+            location="Pittsburgh, PA",
+        )
+        assert best - worst > 45, f"range too narrow: {worst} -> {best}"
+
+    def test_weighting_relevance_out_is_respected(self, prefs, profile):
+        """Someone who genuinely wants location to dominate can say so."""
+        prefs.weights.role_match = 0.0
+        prefs.weights.technical_skills = 0.0
+        score = self._score(prefs, profile, title="Marketing Intern", location="Pittsburgh, PA")
+        assert score > 0, "zeroing relevance must not zero every job"
