@@ -569,13 +569,22 @@ class TestChannelSetup:
 
 
 class TestCredentialNormalisation:
-    """Google displays app passwords with spaces, and people paste them that way."""
+    """Google displays app passwords with spaces, and people paste them that way.
+
+    The fixture below is a made-up sixteen-character string in the shape Google
+    uses. Never put a real credential in a test: it is committed, pushed and
+    public, and no amount of history rewriting un-publishes it.
+    """
+
+    #: Shaped like a Gmail app password. Deliberately not one.
+    SPACED = "abcd efgh ijkl mnop"
+    COMPACT = "abcdefghijklmnop"
 
     def test_a_gmail_app_password_pasted_with_spaces_is_compacted(self, session):
         from app.services import notify_config
 
-        notify_config.save(session, {"smtp_password": "arpg ngdy xtac wgrp"})
-        assert notify_config.load(session).smtp_password == "arpgngdyxtacwgrp"
+        notify_config.save(session, {"smtp_password": self.SPACED})
+        assert notify_config.load(session).smtp_password == self.COMPACT
 
     def test_stray_whitespace_around_a_host_is_removed(self, session):
         from app.services import notify_config
@@ -592,8 +601,8 @@ class TestCredentialNormalisation:
     def test_a_correct_password_is_left_untouched(self, session):
         from app.services import notify_config
 
-        notify_config.save(session, {"smtp_password": "arpgngdyxtacwgrp"})
-        assert notify_config.load(session).smtp_password == "arpgngdyxtacwgrp"
+        notify_config.save(session, {"smtp_password": self.COMPACT})
+        assert notify_config.load(session).smtp_password == self.COMPACT
 
     def test_blank_still_means_unchanged(self, session):
         """Normalising must not turn a whitespace-only submission into a wipe."""
