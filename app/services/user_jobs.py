@@ -208,3 +208,60 @@ def priority_of(state: UserJobState | None, job: Job) -> str:
     if state is not None and state.priority:
         return state.priority
     return job.priority
+
+
+def view_for(session: Session, user: User, jobs: list[Job]) -> dict[int, dict]:
+    """Per-user presentation data for a page of jobs, in one query.
+
+    The dashboard must show *your* score and *your* status, not whatever the
+    shared row happens to hold, and it must do so without a query per card.
+    """
+    states = states_for(session, user, [j.id for j in jobs])
+    return {
+        job.id: {
+            "score": score_of(states.get(job.id), job),
+            "priority": priority_of(states.get(job.id), job),
+            "status": status_of(states.get(job.id)),
+            "reasons": (
+                (states.get(job.id).match_reasons if states.get(job.id) else None)
+                or job.match_reasons
+                or []
+            ),
+            "notified": bool(states.get(job.id).notified) if states.get(job.id) else False,
+        }
+        for job in jobs
+    }
+
+
+def bulk_set_status(
+    session: Session, user: User, job_ids: list[int], status: str, *, now: datetime | None = None
+) -> int:
+    """Apply one decision to many jobs at once. Returns how many changed.
+
+    Clearing a screenful in one action is the difference between triaging a
+    digest and abandoning it.
+    """
+    if not job_ids or status not in {s.value for s in JobStatus}:
+        return 0
+
+    now = now or utcnow()
+    jobs = session.scalars(select(Job).where(Job.id.in_(job_ids))).all()
+    existing = states_for(session, user, [j.id for j in jobs])
+
+    changed = 0
+    for job in jobs:
+        state = existing.get(job.id)
+        if state is None:
+            state = UserJobState(user_id=user.id, job_id=job.id, status=JobStatus.NEW.value)
+            session.add(state)
+        if state.status == status:
+            continue
+        state.status = status
+        if status == JobStatus.SAVED.value and state.saved_at is None:
+            state.saved_at = now
+        if status == JobStatus.APPLIED.value and state.applied_at is None:
+            state.applied_at = now
+        changed += 1
+
+    session.flush()
+    return changed

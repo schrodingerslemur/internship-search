@@ -34,6 +34,21 @@ nav details.account .account-menu{position:absolute;right:0;top:38px;min-width:1
  background:none;color:var(--text);font:inherit;font-size:13.5px;border-radius:6px;cursor:pointer}
 .account-menu a:hover,.account-menu button:hover{background:var(--panel-2);text-decoration:none}
 main.bare{max-width:none;padding:0}
+.listbar{display:flex;align-items:center;gap:14px;margin-bottom:12px}
+.pick-all{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);cursor:pointer}
+.job .pick{display:grid;place-items:center;padding:0 2px 0 4px}
+.job-pick,#pick-all{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+.job.is-done{opacity:.55}
+/* Only appears once something is selected -- no permanent clutter. */
+.bulkbar{position:fixed;left:50%;transform:translateX(-50%) translateY(120%);bottom:22px;z-index:40;
+ display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);
+ border-radius:12px;padding:10px 12px;box-shadow:0 12px 34px rgba(0,0,0,.34);
+ transition:transform .16s ease}
+.bulkbar.show{transform:translateX(-50%) translateY(0)}
+.bulkbar .n{font-size:13px;color:var(--muted);padding:0 4px}
+.bulkbar button{font-size:13px;padding:7px 12px}
+.bulkbar .clear{background:none;border:0;color:var(--muted);cursor:pointer;font:inherit;font-size:12.5px;
+ text-decoration:underline}
 .auth-wrap{min-height:100vh;display:grid;place-items:center;padding:24px}
 .auth-card{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--line);
  border-radius:14px;padding:28px}
@@ -172,5 +187,48 @@ ul.clean li{padding:3px 0;font-size:13px}
 <main{% if hide_nav %} class="bare"{% endif %}>
 {% block content %}{% endblock %}
 </main>
+
+{% if not hide_nav %}
+<div class="bulkbar" id="bulkbar" aria-live="polite">
+  <span class="n"><b id="bulk-n">0</b> selected</span>
+  <button class="btn" type="submit" form="bulk-form" name="status" value="saved">Save</button>
+  <button class="btn" type="submit" form="bulk-form" name="status" value="applied">Applied</button>
+  <button class="btn" type="submit" form="bulk-form" name="status" value="dismissed">Dismiss</button>
+  <button class="clear" type="button" id="bulk-clear">Clear</button>
+</div>
+<script>
+// Selection lives entirely in the DOM: the checkboxes belong to #bulk-form via
+// their form attribute, so submitting posts exactly what is ticked.
+(function () {
+  const bar = document.getElementById('bulkbar');
+  const count = document.getElementById('bulk-n');
+  const picks = () => Array.from(document.querySelectorAll('.job-pick'));
+
+  function sync() {
+    const n = picks().filter(p => p.checked).length;
+    count.textContent = n;
+    bar.classList.toggle('show', n > 0);
+    const all = document.getElementById('pick-all');
+    if (all) all.checked = n > 0 && n === picks().length;
+  }
+
+  document.addEventListener('change', e => {
+    if (e.target.id === 'pick-all') {
+      picks().forEach(p => { p.checked = e.target.checked; });
+    }
+    if (e.target.classList.contains('job-pick') || e.target.id === 'pick-all') sync();
+  });
+
+  document.getElementById('bulk-clear').addEventListener('click', () => {
+    picks().forEach(p => { p.checked = false; });
+    sync();
+  });
+
+  // HTMX swaps the list in place; the new checkboxes start unticked.
+  document.body.addEventListener('htmx:afterSwap', sync);
+  sync();
+})();
+</script>
+{% endif %}
 </body>
 </html>

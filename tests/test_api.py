@@ -383,3 +383,70 @@ class TestDatabaseUrlNormalisation:
 
     def test_sqlite_is_untouched(self):
         assert self._url("sqlite:///./data/internship.db") == "sqlite:///./data/internship.db"
+
+
+class TestBulkActions:
+    """Clearing a screenful in one action, rather than one card at a time."""
+
+    def _user(self, session):
+        from app.services import auth
+
+        return auth.find_by_email(session, "tester@example.com")
+
+    def test_bulk_dismiss_applies_to_every_selected_job(self, client, seeded, session):
+        from app.services import user_jobs
+
+        response = client.post(
+            "/jobs/bulk",
+            data={"job_ids": ["1", "2"], "status": "dismissed", "redirect_to": "/"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+        user = self._user(session)
+        assert user_jobs.status_of(user_jobs.get_state(session, user, 1)) == "dismissed"
+        assert user_jobs.status_of(user_jobs.get_state(session, user, 2)) == "dismissed"
+        # Untouched jobs stay untouched.
+        assert user_jobs.get_state(session, user, 3) is None
+
+    def test_bulk_action_is_scoped_to_the_signed_in_user(self, client, seeded, session):
+        from app.services import auth, user_jobs
+
+        other = auth.create_account(session, email="other@example.com", password="a-good-password")
+        client.post("/jobs/bulk", data={"job_ids": ["1"], "status": "applied"})
+
+        assert user_jobs.get_state(session, other, 1) is None
+
+    def test_an_invalid_status_changes_nothing(self, client, seeded, session):
+        from app.services import user_jobs
+
+        client.post("/jobs/bulk", data={"job_ids": ["1"], "status": "nonsense"})
+        assert user_jobs.get_state(session, self._user(session), 1) is None
+
+    def test_selecting_nothing_is_harmless(self, client, seeded, session):
+        from app.models import UserJobState
+
+        response = client.post("/jobs/bulk", data={"status": "dismissed"}, follow_redirects=False)
+        assert response.status_code == 303
+        assert session.query(UserJobState).count() == 0
+
+    def test_non_numeric_ids_are_ignored(self, client, seeded, session):
+        from app.models import UserJobState
+        from app.services import user_jobs
+
+        client.post("/jobs/bulk", data={"job_ids": ["1", "abc", "../etc"], "status": "saved"})
+        assert user_jobs.status_of(user_jobs.get_state(session, self._user(session), 1)) == "saved"
+        assert session.query(UserJobState).count() == 1
+
+    def test_bulk_dismissed_jobs_leave_the_default_list(self, client, seeded):
+        before = client.get("/api/jobs").json()["total"]
+        client.post("/jobs/bulk", data={"job_ids": ["1", "2"], "status": "dismissed"})
+        assert client.get("/api/jobs").json()["total"] == before - 2
+
+    def test_repeating_a_bulk_action_reports_nothing_changed(self, client, seeded, session):
+        from app.services import user_jobs
+
+        user = self._user(session)
+        first = user_jobs.bulk_set_status(session, user, [1, 2], "saved")
+        second = user_jobs.bulk_set_status(session, user, [1, 2], "saved")
+        assert (first, second) == (2, 0)

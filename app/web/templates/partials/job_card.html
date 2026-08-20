@@ -1,13 +1,19 @@
-<div class="job" id="job-{{ job.id }}">
-  <div class="score {{ job.relevance_score|score_class }}">
-    <div class="v">{{ job.relevance_score|round|int }}</div>
+{% set v = (view or {}).get(job.id) %}
+{% set jscore = v.score if v else job.relevance_score %}
+{% set jpriority = v.priority if v else job.priority %}
+<div class="job {{ 'is-done' if v and v.status in ('applied','dismissed','rejected') else '' }}" id="job-{{ job.id }}">
+  <label class="pick" title="Select">
+    <input type="checkbox" class="job-pick" form="bulk-form" name="job_ids" value="{{ job.id }}">
+  </label>
+  <div class="score {{ jscore|score_class }}">
+    <div class="v">{{ jscore|round|int }}</div>
     <div class="m">/100</div>
   </div>
   <div class="body">
     <div class="co">{{ job.company_name }}</div>
     <div class="ti"><a href="/job/{{ job.id }}">{{ job.title }}</a></div>
     <div class="meta">
-      {% set pm = priority_meta(job.priority) %}
+      {% set pm = priority_meta(jpriority) %}
       <span>{{ pm.emoji }} {{ pm.label }}</span>
       <span>📍 {{ job.location_raw or 'Location not listed' }}</span>
       {% if job.date_posted %}<span>🕒 {{ job.date_posted|timeago }}</span>{% endif %}

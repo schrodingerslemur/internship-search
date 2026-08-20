@@ -1,8 +1,17 @@
 {% if page.jobs %}
-  <div class="sub">
-    Showing {{ page.jobs|length }} of {{ page.total }} canonical jobs
-    &middot; page {{ page.page }} of {{ page.pages }}
+  <form method="post" action="/jobs/bulk" id="bulk-form">
+    <input type="hidden" name="redirect_to" value="{{ request.url.path }}?{{ request.url.query }}">
+  </form>
+
+  <div class="listbar">
+    <label class="pick-all" title="Select all on this page">
+      <input type="checkbox" id="pick-all"><span>Select</span>
+    </label>
+    <span class="sub" style="margin:0">
+      Showing {{ page.jobs|length }} of {{ page.total }} &middot; page {{ page.page }} of {{ page.pages }}
+    </span>
   </div>
+
   {% for job in page.jobs %}{% include "partials/job_card.html" %}{% endfor %}
   <div class="actions" style="justify-content:center;margin-top:16px">
     {% if page.has_prev %}

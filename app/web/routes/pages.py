@@ -13,6 +13,7 @@ from app.logging_setup import get_logger
 from app.models import User
 from app.models.base import KANBAN_ORDER, JobStatus
 from app.services import jobs_query as q
+from app.services import user_jobs
 from app.services.actions import add_note, get_job, set_status, update_application_fields
 from app.services.preferences import load_preferences, load_profile, save_preferences, save_profile
 from app.services.resumes import application_assistant, list_resumes, save_resume
@@ -33,6 +34,7 @@ def dashboard(request: Request, db: Session = Depends(get_db), user: User = Depe
         {
             "counts": q.dashboard_counts(db, user),
             "page": page,
+            "view": user_jobs.view_for(db, user, page.jobs),
             "filters": filters,
             "facets": q.facet_values(db),
             "runs": q.recent_runs(db, limit=1),
@@ -46,7 +48,9 @@ def job_list(request: Request, db: Session = Depends(get_db), user: User = Depen
     filters = q.JobFilters.from_query(dict(request.query_params))
     page = q.search_jobs(db, filters, user)
     return templates.TemplateResponse(
-        request, "partials/job_list.html", {"page": page, "filters": filters}
+        request,
+        "partials/job_list.html",
+        {"page": page, "filters": filters, "view": user_jobs.view_for(db, user, page.jobs)},
     )
 
 
@@ -466,3 +470,22 @@ async def run_search_now(request: Request):
 
     asyncio.create_task(_run())
     return RedirectResponse("/coverage?started=1", status_code=303)
+
+
+@router.post("/jobs/bulk")
+async def jobs_bulk(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Apply one decision to every selected job."""
+    form = await request.form()
+    status = str(form.get("status", ""))
+    job_ids = [int(v) for v in form.getlist("job_ids") if str(v).isdigit()]
+
+    changed = user_jobs.bulk_set_status(db, user, job_ids, status)
+    db.commit()
+    log.info("pages.bulk_status", user_id=user.id, status=status, changed=changed)
+
+    redirect_to = str(form.get("redirect_to") or "/")
+    return RedirectResponse(redirect_to, status_code=303)
