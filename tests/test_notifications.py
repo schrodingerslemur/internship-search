@@ -436,3 +436,66 @@ class TestEmailRendering:
         message = build_empty_digest(NotificationKind.MORNING_DIGEST, now=NOW)
         assert message.html.startswith("<!doctype html>")
         assert "No strong new matches" in message.html
+
+
+class TestAppliedJobsStopAlerting:
+    """Acting on a job must silence it without losing it."""
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            JobStatus.APPLIED.value,
+            JobStatus.ASSESSMENT.value,
+            JobStatus.INTERVIEW.value,
+            JobStatus.OFFER.value,
+            JobStatus.REJECTED.value,
+            JobStatus.DISMISSED.value,
+        ],
+    )
+    def test_acted_on_jobs_are_never_re_alerted(self, session, rules, status):
+        job = make_job(session, cid=f"cid-{status}")
+        job.status = status
+        session.flush()
+
+        selection = select_jobs_for_digest(session, rules, now=NOW)
+        assert job.id not in [j.id for j in selection.jobs]
+
+    def test_but_the_job_itself_is_still_there(self, session, rules):
+        """Silenced, not deleted -- the tracker must keep every application."""
+        job = make_job(session, cid="cid-applied")
+        job.status = JobStatus.APPLIED.value
+        session.flush()
+
+        stored = session.query(Job).filter(Job.id == job.id).one()
+        assert stored.status == JobStatus.APPLIED.value
+        assert stored.is_active is True
+        assert stored.application_url
+
+    def test_an_applied_job_survives_going_stale(self, session, rules):
+        """Even once the posting disappears, your application history remains."""
+        from datetime import timedelta
+
+        from app.services.persistence import expire_stale_jobs
+
+        applied = make_job(session, cid="cid-keep")
+        applied.status = JobStatus.APPLIED.value
+        applied.last_seen_at = NOW - timedelta(days=90)
+
+        ignored = make_job(session, cid="cid-drop")
+        ignored.last_seen_at = NOW - timedelta(days=90)
+        session.flush()
+
+        expire_stale_jobs(session)
+
+        assert applied.status == JobStatus.APPLIED.value, "applied job must not expire"
+        assert applied.is_active is True
+        assert ignored.status == JobStatus.EXPIRED.value, "untouched job should expire"
+
+    def test_a_saved_job_still_gets_alerts_until_acted_on(self, session, rules):
+        """Saving is a bookmark, not a decision -- it should not silence a job."""
+        job = make_job(session, cid="cid-saved")
+        job.status = JobStatus.SAVED.value
+        session.flush()
+
+        selection = select_jobs_for_digest(session, rules, now=NOW)
+        assert job.id in [j.id for j in selection.jobs]
