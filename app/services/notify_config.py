@@ -38,6 +38,21 @@ FIELDS: dict[str, str] = {
 #: Never echoed back to the browser; a blank submission means "keep".
 SECRET_FIELDS: frozenset[str] = frozenset({"smtp_password", "telegram_bot_token"})
 
+#: Fields whose value can never legitimately contain whitespace, but which
+#: providers display with spaces. Google shows a Gmail app password as four
+#: groups of four ("abcd efgh ijkl mnop") and people paste exactly that; the
+#: result authenticates nowhere and looks identical to a wrong password.
+COMPACT_FIELDS: frozenset[str] = frozenset(
+    {"smtp_password", "smtp_host", "smtp_user", "email_from", "email_to",
+     "telegram_bot_token", "telegram_chat_id"}
+)
+
+
+def normalise(key: str, value: str) -> str:
+    if key in COMPACT_FIELDS:
+        return "".join(value.split())
+    return value.strip()
+
 
 @dataclass
 class ChannelConfig:
@@ -123,7 +138,7 @@ def save(session: Session, updates: dict[str, str | None]) -> None:
     for key, value in updates.items():
         if key not in FIELDS:
             continue
-        cleaned = (value or "").strip()
+        cleaned = normalise(key, str(value or ""))
         if key in SECRET_FIELDS and not cleaned:
             continue
         set_config(session, f"notify.{key}", cleaned)
