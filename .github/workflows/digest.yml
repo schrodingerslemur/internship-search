@@ -1,4 +1,4 @@
-# Twice-daily internship digest, entirely on free infrastructure.
+# Internship digest, entirely on free infrastructure.
 #
 # GitHub Actions supplies the schedule and the compute; a free hosted Postgres
 # supplies the memory between runs. Nothing is always-on, so nothing is billed.
@@ -16,14 +16,12 @@
 name: Internship digest
 
 on:
-  # GitHub cron is UTC and does not observe daylight saving, so each local
-  # send time is scheduled at both of its possible UTC hours and the job
-  # itself decides which one is really 08:00 / 16:00 in New York.
+  # Every three hours. A run costs about six minutes and only emails you when
+  # it finds something new, so searching often is how postings reach you while
+  # they are still fresh -- without the fixed-time schedule this used to need,
+  # and without the daylight-saving gymnastics that came with it.
   schedule:
-    - cron: "0 12 * * *"   # 08:00 EDT
-    - cron: "0 13 * * *"   # 08:00 EST
-    - cron: "0 20 * * *"   # 16:00 EDT
-    - cron: "0 21 * * *"   # 16:00 EST
+    - cron: "0 */3 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -39,14 +37,12 @@ concurrency:
 jobs:
   digest:
     runs-on: ubuntu-latest
-    # Run 3 took 39 minutes, 34 of them writing 4,281 jobs to a remote
-    # Postgres one round trip at a time. The registry only grows, so a 45
-    # minute cap was about one run away from cutting a digest off mid-write.
-    timeout-minutes: 120
+    # A healthy run is about six minutes; this is a ceiling for a pathological
+    # one, not a target. It was 45 when persistence still took 34 minutes.
+    timeout-minutes: 60
 
     env:
       TZ: America/New_York
-      DIGEST_HOURS: "8,16"
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
       SMTP_PORT: "587"
@@ -72,54 +68,21 @@ jobs:
       USAJOBS_EMAIL: ${{ secrets.USAJOBS_EMAIL }}
 
     steps:
-      # Cheapest possible step, and first: four cron entries fire each day but
-      # only two of them are the right local hour, so the rest exit here in
-      # seconds. Python's zoneinfo rather than `date`, because it gets DST
-      # right without depending on the runner's TZ handling.
-      - name: Is this the right local hour?
-        id: gate
-        run: |
-          python3 - <<'PY'
-          import os
-          from datetime import datetime
-          from zoneinfo import ZoneInfo
-
-          tz = ZoneInfo(os.environ["TIMEZONE"])
-          now = datetime.now(tz)
-          hours = {int(h) for h in os.environ["DIGEST_HOURS"].split(",")}
-          manual = os.environ["EVENT_NAME"] != "schedule"
-          proceed = manual or now.hour in hours
-
-          print(f"Local time: {now:%Y-%m-%d %H:%M %Z}")
-          print("Manual run -- proceeding." if manual
-                else f"Hour {now.hour} {'is' if proceed else 'is not'} a digest hour.")
-
-          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
-              print(f"proceed={'true' if proceed else 'false'}", file=fh)
-          PY
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.proceed == 'true'
 
       - uses: actions/setup-python@v5
-        if: steps.gate.outputs.proceed == 'true'
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
 
       - name: Install
-        if: steps.gate.outputs.proceed == 'true'
         run: pip install -e ".[postgres]"
 
       - name: Migrate
-        if: steps.gate.outputs.proceed == 'true'
         run: python -m alembic upgrade head
 
       - name: Search and send digest
-        if: steps.gate.outputs.proceed == 'true'
         run: |
           python -m app.cli search \
             --trigger github-actions \
@@ -129,7 +92,7 @@ jobs:
       # Runs even when the search failed, so a failed run still shows what the
       # database looked like afterwards.
       - name: Summary
-        if: always() && steps.gate.outputs.proceed == 'true'
+        if: always()
         run: |
           {
             echo "### Database after this run"

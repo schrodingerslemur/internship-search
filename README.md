@@ -256,7 +256,10 @@ TOP MATCHES
 📍 Santa Clara, CA · 4 sources
 ```
 
-Digests run morning and afternoon in your timezone, every day or weekdays only.
+Digests run on whatever cadence the scheduler is set to — every three hours in
+the shipped GitHub Actions workflow — but a *search* running is not the same as
+an *email* arriving. Mail is sent only when a job clears your threshold and has
+not been sent before, so a frequent schedule buys freshness rather than volume.
 Schedule changes apply immediately — no restart.
 
 ---
@@ -433,11 +436,12 @@ it seeds the registry from the curated lists.
 
 That is the whole setup. `.github/workflows/digest.yml` then fires on its own.
 
-**Why four cron entries for two digests.** GitHub cron is UTC and ignores
-daylight saving, so each send time is scheduled at *both* of its possible UTC
-hours and the job's first step checks what time it actually is in New York,
-exiting in seconds when it is the wrong one. Without this, every digest would
-drift an hour twice a year.
+**The schedule is every three hours, not twice a day.** A run costs about six
+minutes and only sends mail when it finds something that clears your score
+threshold and has not been sent before, so running often is what gets a posting
+to you while it is still fresh -- it does not multiply the email you receive.
+That property comes from the notification rules, not the schedule: see
+[Notifications](#notifications).
 
 **The dashboard.** Two ways, and they can coexist:
 
