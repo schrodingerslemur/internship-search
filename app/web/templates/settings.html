@@ -146,7 +146,68 @@
     A job is never sent twice unless it materially changed and the cooldown
     ({{ prefs.notifications.update_cooldown_hours }}h) has elapsed.
   </div>
+
+  {# Setup for the selected channel, in the same form: choosing a provider
+     and configuring it should not be two screens apart. #}
+  <div class="channel-setup" data-provider="email"
+       {% if prefs.notifications.provider != 'email' %}hidden{% endif %}>
+    <h3 style="margin-top:18px">Email setup</h3>
+    <div class="row">
+      <div class="field"><label>SMTP host</label>
+        <input name="smtp_host" value="{{ channel.smtp_host or '' }}" placeholder="smtp.gmail.com"></div>
+      <div class="field"><label>Port</label>
+        <input name="smtp_port" type="number" value="{{ channel.smtp_port or 587 }}"></div>
+      <div class="field"><label>Username</label>
+        <input name="smtp_user" value="{{ channel.smtp_user or '' }}" placeholder="you@gmail.com"></div>
+      <div class="field"><label>Password</label>
+        <input name="smtp_password" type="password" autocomplete="new-password"
+               placeholder="{{ '•••••••• (unchanged)' if channel.smtp_password else 'Gmail app password' }}">
+        <div class="help">Gmail needs an app password, not your account password.</div></div>
+      <div class="field"><label>From address</label>
+        <input name="email_from" value="{{ channel.email_from or '' }}"
+               placeholder="defaults to the username"></div>
+      <div class="field"><label>Send my digests to</label>
+        <input name="digest_email" value="{{ digest_email or '' }}" placeholder="you@example.com"></div>
+    </div>
+  </div>
+
+  <div class="channel-setup" data-provider="telegram"
+       {% if prefs.notifications.provider != 'telegram' %}hidden{% endif %}>
+    <h3 style="margin-top:18px">Telegram setup</h3>
+    <div class="row">
+      <div class="field"><label>Bot token</label>
+        <input name="telegram_bot_token" type="password" autocomplete="new-password"
+               placeholder="{{ '•••••••• (unchanged)' if channel.telegram_bot_token else 'from @BotFather' }}"></div>
+      <div class="field"><label>Chat ID</label>
+        <input name="telegram_chat_id" value="{{ channel.telegram_chat_id or '' }}"></div>
+    </div>
+  </div>
+
+  <div class="note {{ '' if channel_ready else 'warn' }}" style="margin-top:16px">
+    {% if channel_ready %}
+      ✓ <strong>{{ prefs.notifications.provider }}</strong> is configured and ready.
+    {% else %}
+      ⚠ <strong>{{ prefs.notifications.provider }}</strong> still needs:
+      {{ channel_missing|join(', ') }}. Digests fall back to a file until it is complete.
+    {% endif %}
+    <button class="btn sm" type="submit" formaction="/settings/test-channel" formnovalidate
+            style="margin-left:8px">Save &amp; send test</button>
+  </div>
 </div>
+
+<script>
+// Show only the selected channel's fields; the others stay in the DOM so a
+// half-filled setup is not lost by toggling the select back and forth.
+(function () {
+  const select = document.querySelector('select[name=notification_provider]');
+  if (!select) return;
+  const sync = () => document.querySelectorAll('.channel-setup').forEach(
+    el => { el.hidden = el.dataset.provider !== select.value; }
+  );
+  select.addEventListener('change', sync);
+  sync();
+})();
+</script>
 
 <h2>Schedule</h2>
 <div class="panel">

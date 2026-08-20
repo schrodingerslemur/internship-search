@@ -109,7 +109,13 @@ async def _dispatch(
     now: datetime,
     dry_run: bool,
 ) -> tuple[Notification, SendResult]:
-    provider = get_provider(rules.provider, recipient=user.notification_email)
+    from app.services import notify_config
+
+    provider = get_provider(
+        rules.provider,
+        recipient=user.notification_email,
+        config=notify_config.load(session),
+    )
 
     notification = Notification(
         kind=str(kind),
@@ -156,9 +162,15 @@ async def _dispatch(
     return notification, result
 
 
-async def send_test_notification(session: Session, provider_name: str) -> SendResult:
+async def send_test_notification(
+    session: Session, provider_name: str, *, recipient: str | None = None
+) -> SendResult:
     """Send a one-off message so the user can verify their setup."""
-    provider = get_provider(provider_name)
+    from app.services import notify_config
+
+    provider = get_provider(
+        provider_name, recipient=recipient, config=notify_config.load(session)
+    )
     message = NotificationMessage(
         text=(
             "✅ Internship Search is connected.\n\n"

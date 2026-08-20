@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -218,24 +219,40 @@ def analytics(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 
 
 @router.get("/settings", response_class=HTMLResponse)
-def settings_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def settings_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+) -> HTMLResponse:
     from app.notify.providers import provider_catalog
+    from app.services import notify_config
     from app.sources.registry import source_catalog
 
+    channel = notify_config.load(db)
+    prefs = load_preferences(db, user=user)
     return templates.TemplateResponse(
         request,
         "settings.html",
         {
-            "prefs": load_preferences(db),
+            "prefs": prefs,
             "catalog": source_catalog(),
-            "providers": provider_catalog(),
+            "providers": provider_catalog(config=channel),
+            "channel": channel,
+            "channel_ready": channel.ready_for(prefs.notifications.provider),
+            "channel_missing": channel.missing_for(prefs.notifications.provider),
+            "digest_email": user.notification_email,
             "saved": request.query_params.get("saved") == "1",
+            "error": request.query_params.get("error"),
         },
     )
 
 
 @router.post("/settings")
-async def settings_save(request: Request, db: Session = Depends(get_db)):
+async def settings_save(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
     """Persist the settings form.
 
     The form is flat; this rebuilds the nested preference document from it and
@@ -243,7 +260,7 @@ async def settings_save(request: Request, db: Session = Depends(get_db)):
     the stored configuration.
     """
     form = await request.form()
-    prefs = load_preferences(db)
+    prefs = load_preferences(db, user=user)
     data = prefs.model_dump()
 
     def lines(field: str) -> list[str]:
@@ -370,7 +387,39 @@ async def settings_save(request: Request, db: Session = Depends(get_db)):
             status_code=400,
         )
 
-    save_preferences(db, validated)
+    # Channel credentials travel with the same form, so choosing a provider
+    # and setting it up are one action rather than two screens apart.
+    from app.services import notify_config
+
+    notify_config.save(
+        db,
+        {
+            "smtp_host": form.get("smtp_host"),
+            "smtp_port": form.get("smtp_port"),
+            "smtp_user": form.get("smtp_user"),
+            "smtp_password": form.get("smtp_password"),
+            "email_from": form.get("email_from"),
+            "telegram_bot_token": form.get("telegram_bot_token"),
+            "telegram_chat_id": form.get("telegram_chat_id"),
+        },
+    )
+
+    # Refuse to select a channel that cannot actually deliver. Saving it
+    # anyway is how you end up believing digests are being sent when every
+    # one of them is quietly falling back to a file.
+    channel = notify_config.load(db)
+    chosen = validated.notifications.provider
+    if validated.notifications.enabled and not channel.ready_for(chosen):
+        missing = ", ".join(channel.missing_for(chosen))
+        db.rollback()
+        return RedirectResponse(
+            f"/settings?error={quote(f'{chosen} still needs: {missing}')}", status_code=303
+        )
+
+    if form.get("digest_email") is not None:
+        user.digest_email = str(form.get("digest_email")).strip() or None
+
+    save_preferences(db, validated, user=user)
     db.commit()
 
     # Reschedule so time/cadence changes take effect without a restart.
@@ -495,3 +544,60 @@ async def jobs_bulk(
 
     redirect_to = str(form.get("redirect_to") or "/")
     return RedirectResponse(redirect_to, status_code=303)
+
+
+@router.post("/settings/test-channel")
+async def settings_test_channel(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Save the channel credentials, then actually send through them.
+
+    "Configured" only means the fields are non-empty; a wrong password looks
+    identical until something tries to deliver. So the button proves it.
+    """
+    from app.notify.engine import send_test_notification
+    from app.services import notify_config
+
+    form = await request.form()
+    notify_config.save(
+        db,
+        {
+            "smtp_host": form.get("smtp_host"),
+            "smtp_port": form.get("smtp_port"),
+            "smtp_user": form.get("smtp_user"),
+            "smtp_password": form.get("smtp_password"),
+            "email_from": form.get("email_from"),
+            "telegram_bot_token": form.get("telegram_bot_token"),
+            "telegram_chat_id": form.get("telegram_chat_id"),
+        },
+    )
+    if form.get("digest_email") is not None:
+        user.digest_email = str(form.get("digest_email")).strip() or None
+    db.flush()
+
+    provider = str(form.get("notification_provider") or "email")
+    channel = notify_config.load(db)
+    if not channel.ready_for(provider):
+        db.commit()
+        missing = ", ".join(channel.missing_for(provider))
+        return RedirectResponse(
+            f"/settings?error={quote(f'{provider} still needs: {missing}')}", status_code=303
+        )
+
+    result = await send_test_notification(
+        db, provider, recipient=user.notification_email
+    )
+    db.commit()
+
+    if result.ok and result.provider == provider:
+        target = user.notification_email if provider == "email" else provider
+        return RedirectResponse(
+            f"/settings?saved=1&error={quote(f'Test sent via {provider} to {target}.')}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        f"/settings?error={quote(result.error or f'Test fell back to {result.provider}.')}",
+        status_code=303,
+    )

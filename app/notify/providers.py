@@ -36,10 +36,10 @@ class TelegramProvider(NotificationProvider):
     display_name = "Telegram"
     required_config = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
 
-    def __init__(self, token: str | None = None, chat_id: str | None = None) -> None:
-        settings = get_settings()
-        self.token = token or settings.telegram_bot_token
-        self.chat_id = chat_id or settings.telegram_chat_id
+    def __init__(self, token: str | None = None, chat_id: str | None = None, config=None) -> None:
+        source = config or get_settings()
+        self.token = token or source.telegram_bot_token
+        self.chat_id = chat_id or source.telegram_chat_id
 
     def is_configured(self) -> bool:
         return bool(self.token and self.chat_id)
@@ -99,17 +99,20 @@ class EmailProvider(NotificationProvider):
     display_name = "Email (SMTP)"
     required_config = ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "EMAIL_TO")
 
-    def __init__(self, recipient: str | None = None) -> None:
-        settings = get_settings()
-        self.host = settings.smtp_host
-        self.port = settings.smtp_port
-        self.user = settings.smtp_user
-        self.password = settings.smtp_password
-        self.starttls = settings.smtp_starttls
-        self.sender = settings.email_sender
+    def __init__(self, recipient: str | None = None, config=None) -> None:
+        # ``config`` is the resolved channel configuration (database over
+        # environment). Falling back to settings keeps every existing caller
+        # -- and a deployment that configures nothing in the UI -- working.
+        source = config or get_settings()
+        self.host = source.smtp_host
+        self.port = source.smtp_port
+        self.user = source.smtp_user
+        self.password = source.smtp_password
+        self.starttls = getattr(source, "smtp_starttls", True)
+        self.sender = source.email_sender
         # Each account's digest goes to that account's own address; EMAIL_TO is
         # the deployment-wide fallback for a user who has not set one.
-        raw = recipient or settings.email_to or ""
+        raw = recipient or source.email_to or ""
         # A comma-separated list is accepted so a digest can go to two inboxes.
         self.recipients = [r.strip() for r in raw.split(",") if r.strip()]
 
@@ -228,7 +231,9 @@ PROVIDERS: dict[str, type[NotificationProvider]] = {
 FALLBACK_ORDER: tuple[str, ...] = (EmailProvider.name, TelegramProvider.name)
 
 
-def get_provider(name: str, *, recipient: str | None = None) -> NotificationProvider:
+def get_provider(
+    name: str, *, recipient: str | None = None, config=None
+) -> NotificationProvider:
     """Instantiate a provider, degrading to a real channel and then to a file.
 
     Degrading rather than failing means a digest is never lost just because
@@ -236,7 +241,11 @@ def get_provider(name: str, *, recipient: str | None = None) -> NotificationProv
     """
     def build(provider_cls) -> NotificationProvider:
         # Only the email provider is addressed; a chat channel has one target.
-        return provider_cls(recipient) if provider_cls is EmailProvider else provider_cls()
+        if provider_cls is EmailProvider:
+            return provider_cls(recipient, config=config)
+        if provider_cls is TelegramProvider:
+            return provider_cls(config=config)
+        return provider_cls()
 
     cls = PROVIDERS.get(name)
     if cls is None:
@@ -258,10 +267,15 @@ def get_provider(name: str, *, recipient: str | None = None) -> NotificationProv
     return FileProvider()
 
 
-def provider_catalog() -> list[dict[str, object]]:
+def provider_catalog(config=None) -> list[dict[str, object]]:
     out = []
     for name, cls in PROVIDERS.items():
-        instance = cls()
+        if cls is EmailProvider:
+            instance = cls(config=config)
+        elif cls is TelegramProvider:
+            instance = cls(config=config)
+        else:
+            instance = cls()
         out.append(
             {
                 "name": name,

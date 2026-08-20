@@ -450,3 +450,119 @@ class TestBulkActions:
         first = user_jobs.bulk_set_status(session, user, [1, 2], "saved")
         second = user_jobs.bulk_set_status(session, user, [1, 2], "saved")
         assert (first, second) == (2, 0)
+
+
+class TestChannelSetup:
+    """Choosing a provider and configuring it are one action.
+
+    Previously credentials lived only in environment variables, so the
+    dashboard reported email as unconfigured while the scheduled runs -- which
+    had the variables -- were sending digests perfectly well.
+    """
+
+    def _form(self, **overrides):
+        base = {
+            "notifications_enabled": "on",
+            "notification_provider": "email",
+            "notification_min_score": "70",
+            "notification_max_jobs": "7",
+        }
+        base.update(overrides)
+        return base
+
+    def test_selecting_an_unconfigured_provider_is_refused(self, client, session):
+        response = client.post("/settings", data=self._form(), follow_redirects=False)
+        assert response.status_code == 303
+        assert "error=" in response.headers["location"]
+        assert "smtp" in response.headers["location"].lower()
+
+    def test_supplying_credentials_in_the_same_submission_succeeds(self, client, session):
+        from app.services import notify_config
+
+        response = client.post(
+            "/settings",
+            data=self._form(
+                smtp_host="smtp.gmail.com",
+                smtp_port="587",
+                smtp_user="me@gmail.com",
+                smtp_password="app-password",
+                digest_email="me@andrew.cmu.edu",
+            ),
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert "saved=1" in response.headers["location"]
+
+        channel = notify_config.load(session)
+        assert channel.email_ready
+        assert channel.smtp_host == "smtp.gmail.com"
+
+    def test_credentials_are_read_back_from_the_database(self, session):
+        """The web host and the scheduled run share a database, not an env."""
+        from app.services import notify_config
+
+        notify_config.save(
+            session,
+            {"smtp_host": "smtp.example.com", "smtp_password": "secret", "smtp_user": "a@b.c"},
+        )
+        assert notify_config.load(session).email_ready
+
+    def test_a_blank_secret_keeps_the_stored_one(self, session):
+        """The form shows a placeholder, so submitting it must not wipe it."""
+        from app.services import notify_config
+
+        notify_config.save(
+            session,
+            {"smtp_host": "smtp.example.com", "smtp_user": "a@b.c", "smtp_password": "secret"},
+        )
+        notify_config.save(session, {"smtp_host": "smtp.example.com", "smtp_password": ""})
+
+        assert notify_config.load(session).smtp_password == "secret"
+
+    def test_a_blank_non_secret_does_clear_the_field(self, session):
+        from app.services import notify_config
+
+        notify_config.save(session, {"smtp_user": "a@b.c"})
+        notify_config.save(session, {"smtp_user": ""})
+        assert not notify_config.load(session).smtp_user
+
+    def test_missing_fields_are_named_in_human_terms(self, session):
+        from app.services import notify_config
+
+        missing = notify_config.load(session).missing_for("email")
+        assert "SMTP host" in missing
+        assert "SMTP password" in missing
+
+    def test_channels_needing_no_setup_are_always_ready(self, session):
+        from app.services import notify_config
+
+        channel = notify_config.load(session)
+        assert channel.ready_for("file")
+        assert channel.ready_for("console")
+        assert channel.missing_for("file") == []
+
+    def test_disabled_notifications_skip_the_requirement(self, client, session):
+        """Turning notifications off must not demand credentials first."""
+        response = client.post(
+            "/settings",
+            data=self._form(notifications_enabled="", notification_provider="email"),
+            follow_redirects=False,
+        )
+        assert "saved=1" in response.headers["location"]
+
+    def test_the_settings_page_reports_the_real_state(self, client, session):
+        from app.services import notify_config
+
+        assert "still needs" in client.get("/settings").text
+
+        notify_config.save(
+            session,
+            {"smtp_host": "smtp.example.com", "smtp_user": "a@b.c", "smtp_password": "secret"},
+        )
+        client.post(
+            "/settings",
+            data=self._form(
+                smtp_host="smtp.example.com", smtp_user="a@b.c", smtp_password="secret"
+            ),
+        )
+        assert "is configured and ready" in client.get("/settings").text
