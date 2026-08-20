@@ -28,7 +28,14 @@ from app.models.tracking import (
     SearchRun,
     SearchRunSource,
 )
-from app.models.user import CandidateProfile, Resume, User, UserPreference
+from app.models.user import (
+    AppConfig,
+    CandidateProfile,
+    Resume,
+    User,
+    UserJobState,
+    UserPreference,
+)
 
 __all__ = [
     "KANBAN_ORDER",
@@ -61,6 +68,8 @@ __all__ = [
     "SourceKind",
     "SponsorshipStatus",
     "User",
+    "AppConfig",
+    "UserJobState",
     "UserPreference",
     "utcnow",
 ]

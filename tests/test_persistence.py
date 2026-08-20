@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
+
 from app.models import Application, Company, Job, JobEvent, JobListing
 from app.models.base import Freshness, JobStatus
 from app.pipeline import discovery
@@ -165,39 +167,48 @@ class TestFreshness:
 
 
 class TestUserActions:
-    def test_save_creates_an_application(self, session, prefs, profile):
+    @pytest.fixture
+    def user(self, session):
+        from app.services.preferences import get_or_create_user
+
+        return get_or_create_user(session)
+
+    def test_save_creates_an_application(self, session, prefs, profile, user):
+        from app.services import user_jobs
+
         run_pipeline(session, [make_raw()], prefs, profile)
         job = session.query(Job).one()
-        set_status(session, job, JobStatus.SAVED, now=NOW)
+        set_status(session, job, JobStatus.SAVED, user, now=NOW)
         application = session.query(Application).one()
         assert application.date_saved is not None
-        assert job.status == JobStatus.SAVED.value
+        # Status is the user's opinion now, not a property of the posting.
+        assert user_jobs.status_of(user_jobs.get_state(session, user, job)) == "saved"
 
-    def test_applying_snapshots_the_score(self, session, prefs, profile):
+    def test_applying_snapshots_the_score(self, session, prefs, profile, user):
         run_pipeline(session, [make_raw()], prefs, profile)
         job = session.query(Job).one()
         original = job.relevance_score
-        set_status(session, job, JobStatus.APPLIED, now=NOW)
+        set_status(session, job, JobStatus.APPLIED, user, now=NOW)
         job.relevance_score = 10.0  # later re-scoring must not rewrite history
         session.flush()
         assert session.query(Application).one().score_at_apply == original
 
-    def test_status_changes_are_logged(self, session, prefs, profile):
+    def test_status_changes_are_logged(self, session, prefs, profile, user):
         run_pipeline(session, [make_raw()], prefs, profile)
         job = session.query(Job).one()
-        set_status(session, job, JobStatus.SAVED, now=NOW)
-        set_status(session, job, JobStatus.APPLIED, now=NOW)
+        set_status(session, job, JobStatus.SAVED, user, now=NOW)
+        set_status(session, job, JobStatus.APPLIED, user, now=NOW)
         assert session.query(JobEvent).filter_by(event_type="status_changed").count() == 2
 
-    def test_notes_attach_to_the_application(self, session, prefs, profile):
+    def test_notes_attach_to_the_application(self, session, prefs, profile, user):
         run_pipeline(session, [make_raw()], prefs, profile)
         job = session.query(Job).one()
-        add_note(session, job, "Need a referral from Priya")
+        add_note(session, job, "Need a referral from Priya", user)
         assert session.query(Application).one().notes[0].body.startswith("Need a referral")
 
-    def test_empty_note_is_ignored(self, session, prefs, profile):
+    def test_empty_note_is_ignored(self, session, prefs, profile, user):
         run_pipeline(session, [make_raw()], prefs, profile)
-        assert add_note(session, session.query(Job).one(), "   ") is None
+        assert add_note(session, session.query(Job).one(), "   ", user) is None
 
     def test_lookup_by_canonical_id(self, session, prefs, profile):
         run_pipeline(session, [make_raw()], prefs, profile)

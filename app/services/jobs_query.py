@@ -15,7 +15,16 @@ from typing import Any
 from sqlalchemy import Select, String, case, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models import Application, Company, Job, JobListing, Notification, SearchRun
+from app.models import (
+    Application,
+    Company,
+    Job,
+    JobListing,
+    Notification,
+    SearchRun,
+    User,
+    UserJobState,
+)
 from app.models.base import JobStatus, Priority, utcnow
 
 
@@ -111,13 +120,38 @@ class JobFilters:
         return urlencode(data)
 
 
-def apply_filters(stmt: Select, filters: JobFilters, *, now: datetime | None = None) -> Select:
+def _user_status(user: User | None):
+    """Correlated subquery giving this user's status for each job row.
+
+    A left join would multiply rows when combined with the other joins here, so
+    the status is fetched as a scalar instead. Jobs the user has never touched
+    have no row at all, hence the COALESCE to 'new'.
+    """
+    if user is None:
+        return None
+    return (
+        select(UserJobState.status)
+        .where(UserJobState.job_id == Job.id, UserJobState.user_id == user.id)
+        .correlate(Job)
+        .scalar_subquery()
+    )
+
+
+def apply_filters(
+    stmt: Select, filters: JobFilters, *, now: datetime | None = None, user: User | None = None
+) -> Select:
     now = now or utcnow()
 
     if not filters.include_inactive:
         stmt = stmt.where(Job.is_active.is_(True))
+    status_expr = _user_status(user)
     if not filters.include_dismissed and filters.status != JobStatus.DISMISSED.value:
-        stmt = stmt.where(Job.status != JobStatus.DISMISSED.value)
+        if status_expr is not None:
+            stmt = stmt.where(
+                func.coalesce(status_expr, JobStatus.NEW.value) != JobStatus.DISMISSED.value
+            )
+        else:
+            stmt = stmt.where(Job.status != JobStatus.DISMISSED.value)
 
     if filters.q:
         like = f"%{filters.q.lower()}%"
@@ -141,7 +175,10 @@ def apply_filters(stmt: Select, filters: JobFilters, *, now: datetime | None = N
     if filters.priority:
         stmt = stmt.where(Job.priority == filters.priority)
     if filters.status:
-        stmt = stmt.where(Job.status == filters.status)
+        if status_expr is not None:
+            stmt = stmt.where(func.coalesce(status_expr, JobStatus.NEW.value) == filters.status)
+        else:
+            stmt = stmt.where(Job.status == filters.status)
     if filters.remote:
         stmt = stmt.where(Job.remote_status == filters.remote)
     if filters.skill:
@@ -200,8 +237,8 @@ class JobPage:
         return self.page < self.pages
 
 
-def search_jobs(session: Session, filters: JobFilters) -> JobPage:
-    base = apply_filters(select(Job), filters)
+def search_jobs(session: Session, filters: JobFilters, user: User | None = None) -> JobPage:
+    base = apply_filters(select(Job), filters, user=user)
     total = session.scalar(select(func.count()).select_from(base.subquery())) or 0
     stmt = _order(base, filters.sort)
     stmt = stmt.offset((filters.page - 1) * filters.per_page).limit(filters.per_page)
@@ -209,7 +246,7 @@ def search_jobs(session: Session, filters: JobFilters) -> JobPage:
     return JobPage(jobs=jobs, total=total, page=filters.page, per_page=filters.per_page)
 
 
-def dashboard_counts(session: Session) -> dict[str, int]:
+def dashboard_counts(session: Session, user: User | None = None) -> dict[str, int]:
     """Headline counters for the dashboard header."""
     now = utcnow()
     today = now - timedelta(days=1)
@@ -219,14 +256,19 @@ def dashboard_counts(session: Session) -> dict[str, int]:
         return session.scalar(stmt) or 0
 
     active = Job.is_active.is_(True)
-    not_dismissed = Job.status != JobStatus.DISMISSED.value
+    status_expr = _user_status(user)
+    if status_expr is not None:
+        status_col = func.coalesce(status_expr, JobStatus.NEW.value)
+    else:
+        status_col = Job.status
+    not_dismissed = status_col != JobStatus.DISMISSED.value
     return {
         "apply_now": count(active, not_dismissed, Job.priority == Priority.APPLY_NOW.value),
         "strong": count(active, not_dismissed, Job.priority == Priority.STRONG_MATCH.value),
         "new_today": count(active, not_dismissed, Job.date_discovered >= today),
-        "saved": count(Job.status == JobStatus.SAVED.value),
+        "saved": count(status_col == JobStatus.SAVED.value),
         "applied": count(
-            Job.status.in_(
+            status_col.in_(
                 [
                     JobStatus.APPLIED.value,
                     JobStatus.ASSESSMENT.value,
@@ -236,8 +278,8 @@ def dashboard_counts(session: Session) -> dict[str, int]:
             )
         ),
         "total_active": count(active, not_dismissed),
-        "interviews": count(Job.status == JobStatus.INTERVIEW.value),
-        "offers": count(Job.status == JobStatus.OFFER.value),
+        "interviews": count(status_col == JobStatus.INTERVIEW.value),
+        "offers": count(status_col == JobStatus.OFFER.value),
     }
 
 
@@ -289,7 +331,7 @@ def facet_values(session: Session, limit: int = 30) -> dict[str, list]:
     }
 
 
-def kanban_board(session: Session) -> dict[str, list[Job]]:
+def kanban_board(session: Session, user: User | None = None) -> dict[str, list[Job]]:
     """Jobs grouped by tracker column."""
     from app.models.base import KANBAN_ORDER
 
@@ -298,7 +340,11 @@ def kanban_board(session: Session) -> dict[str, list[Job]]:
         jobs = list(
             session.scalars(
                 select(Job)
-                .where(Job.status == status.value)
+                .where(
+                    func.coalesce(_user_status(user), JobStatus.NEW.value) == status.value
+                    if user is not None
+                    else Job.status == status.value
+                )
                 .order_by(Job.relevance_score.desc())
                 .limit(80)
             ).all()

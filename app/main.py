@@ -6,18 +6,15 @@ and owns the scheduler lifecycle. One process, one port, one deploy.
 
 from __future__ import annotations
 
-import base64
-import binascii
-import secrets
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import PROJECT_ROOT, ensure_dirs, get_settings
 from app.logging_setup import configure_logging, get_logger
-from app.web.routes import api, pages
+from app.web.routes import accounts, api, pages
 
 log = get_logger("main")
 
@@ -34,6 +31,8 @@ async def lifespan(app: FastAPI):
 
     if schedule_seed() is not None:
         log.info("bootstrap.seed_scheduled")
+
+    app.state.signing_key = _load_signing_key()
 
     scheduler = None
     if settings.scheduler_enabled:
@@ -54,40 +53,71 @@ async def lifespan(app: FastAPI):
         log.info("scheduler.stopped")
 
 
-#: Paths that must stay reachable without credentials -- the platform health
-#: check runs unauthenticated, and blocking it fails the deploy.
-_PUBLIC_PATHS: frozenset[str] = frozenset({"/health"})
+def _load_signing_key() -> bytes:
+    """The cookie-signing key, read once at startup.
+
+    Persisted in the database so it survives the restarts a sleeping free-tier
+    host performs constantly. If the database cannot be read yet -- a fresh
+    install mid-migration, or a test harness -- fall back to a process-local
+    key: sessions then last only as long as the process, which is correct
+    behaviour for a database that cannot yet vouch for anyone.
+    """
+    import secrets
+
+    from app.db import session_scope
+    from app.services.auth import get_signing_key
+
+    try:
+        with session_scope() as session:
+            return get_signing_key(session)
+    except Exception:
+        log.warning("auth.signing_key_ephemeral")
+        return secrets.token_urlsafe(48).encode("utf-8")
 
 
-def _install_basic_auth(app: FastAPI, username: str, password: str) -> None:
-    """Gate the whole dashboard behind HTTP basic auth.
+#: Reachable without a session: the platform health check runs unauthenticated,
+#: and the sign-in pages obviously cannot require being signed in.
+_PUBLIC_PATHS: frozenset[str] = frozenset({"/health", "/login", "/signup", "/logout"})
+_PUBLIC_PREFIXES: tuple[str, ...] = ("/static/",)
 
-    The dashboard exposes a personal profile, resumes and an application
-    tracker, so a public deployment must not be world-readable. Basic auth is
-    enough for a single user and costs no session storage.
+
+def _is_public(path: str) -> bool:
+    return path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES)
+
+
+def _install_session_auth(app: FastAPI) -> None:
+    """Resolve the signed session cookie into ``request.state.user``.
+
+    The dashboard holds a personal profile, resumes and an application tracker,
+    so nothing but the paths above is readable without an account. Browsers get
+    a redirect to the sign-in page; ``/api`` callers get a 401, because
+    redirecting an XHR to an HTML login form only produces a confusing error.
     """
 
     @app.middleware("http")
-    async def require_auth(request: Request, call_next):
-        if request.url.path in _PUBLIC_PATHS:
-            return await call_next(request)
+    async def require_session(request: Request, call_next):
+        request.state.user = None
 
-        header = request.headers.get("authorization", "")
-        if header.startswith("Basic "):
-            try:
-                decoded = base64.b64decode(header[6:]).decode("utf-8")
-                user, _, secret = decoded.partition(":")
-            except (binascii.Error, UnicodeDecodeError):
-                user, secret = "", ""
-            # compare_digest on both fields, so neither is a timing oracle.
-            if secrets.compare_digest(user, username) and secrets.compare_digest(secret, password):
-                return await call_next(request)
+        if not _is_public(request.url.path):
+            from app.services import auth
 
-        return Response(
-            status_code=401,
-            content="Authentication required.",
-            headers={"WWW-Authenticate": 'Basic realm="Internship Search"'},
-        )
+            # The cookie is signed, so who it names can be trusted without
+            # asking the database -- which keeps every page load free of an
+            # extra round trip to a remote Postgres.
+            claims = auth.read_claims(
+                request.cookies.get(auth.SESSION_COOKIE), request.app.state.signing_key
+            )
+            user_id = claims.get("uid") if claims else None
+            if user_id is not None:
+                request.state.user = claims
+
+            if user_id is None:
+                if request.url.path.startswith("/api"):
+                    return JSONResponse({"detail": "authentication required"}, status_code=401)
+                return RedirectResponse("/login", status_code=303)
+            request.state.user_id = user_id
+
+        return await call_next(request)
 
 
 def create_app() -> FastAPI:
@@ -98,18 +128,14 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    settings = get_settings()
-    if settings.dashboard_password:
-        _install_basic_auth(app, settings.dashboard_user, settings.dashboard_password)
-        log.info("auth.enabled", user=settings.dashboard_user)
-    else:
-        log.warning("auth.disabled")
+    _install_session_auth(app)
 
     static_dir = PROJECT_ROOT / "app" / "web" / "static"
     static_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     app.include_router(api.router, prefix="/api")
+    app.include_router(accounts.router)
     app.include_router(pages.router)
 
     @app.exception_handler(Exception)

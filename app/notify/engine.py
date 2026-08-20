@@ -11,7 +11,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.logging_setup import get_logger
-from app.models import Job, Notification, NotificationItem
+from app.models import Job, Notification, NotificationItem, User
 from app.models.base import NotificationKind, utcnow
 from app.notify.base import NotificationMessage, SendResult
 from app.notify.digest import (
@@ -22,6 +22,7 @@ from app.notify.digest import (
 )
 from app.notify.providers import get_provider
 from app.schemas.preferences import NotificationRules
+from app.services import user_jobs
 
 log = get_logger("notify.engine")
 
@@ -31,6 +32,7 @@ async def send_digest(
     rules: NotificationRules,
     kind: NotificationKind,
     *,
+    user: User | None = None,
     run_id: int | None = None,
     base_url: str = "http://127.0.0.1:8000",
     stats: dict[str, int] | None = None,
@@ -44,7 +46,12 @@ async def send_digest(
         log.info("notify.disabled")
         return None, None
 
-    selection = select_jobs_for_digest(session, rules, now=now, candidate_ids=candidate_ids)
+    from app.services.preferences import get_or_create_user
+
+    user = user or get_or_create_user(session)
+    selection = select_jobs_for_digest(
+        session, rules, user=user, now=now, candidate_ids=candidate_ids
+    )
 
     if selection.is_empty:
         if not rules.send_when_empty:
@@ -55,7 +62,8 @@ async def send_digest(
         message = build_digest(selection, kind, base_url=base_url, now=now, stats=stats)
 
     return await _dispatch(
-        session, rules, kind, message, selection, run_id=run_id, now=now, dry_run=dry_run
+        session, rules, kind, message, selection, user=user, run_id=run_id, now=now,
+        dry_run=dry_run,
     )
 
 
@@ -66,11 +74,12 @@ async def _dispatch(
     message: NotificationMessage,
     selection: DigestSelection,
     *,
+    user: User,
     run_id: int | None,
     now: datetime,
     dry_run: bool,
 ) -> tuple[Notification, SendResult]:
-    provider = get_provider(rules.provider)
+    provider = get_provider(rules.provider, recipient=user.notification_email)
 
     notification = Notification(
         kind=str(kind),
@@ -104,9 +113,10 @@ async def _dispatch(
                     score=job.relevance_score,
                 )
             )
-            job.notified = True
-            job.notified_at = now
-        log.info("notify.sent", provider=provider.name, jobs=len(selection.jobs))
+            user_jobs.mark_notified(session, user, job, now=now)
+        log.info(
+            "notify.sent", provider=provider.name, jobs=len(selection.jobs), user_id=user.id
+        )
     else:
         notification.status = "failed"
         notification.error = result.error

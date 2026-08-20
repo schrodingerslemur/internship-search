@@ -38,10 +38,6 @@ class Settings(BaseSettings):
     #: Public URL of the deployed dashboard, used for links inside digests.
     #: Falls back to the local host/port when unset.
     public_base_url: str | None = None
-    #: When set, the dashboard and API require HTTP basic auth. Unset means
-    #: open -- fine locally, never on a public host.
-    dashboard_user: str = "me"
-    dashboard_password: str | None = None
 
     # ---- Notifications ----
     telegram_bot_token: str | None = None
@@ -132,10 +128,6 @@ class Settings(BaseSettings):
     @property
     def email_available(self) -> bool:
         return bool(self.smtp_host and self.smtp_password and self.email_sender and self.email_to)
-
-    @property
-    def dashboard_protected(self) -> bool:
-        return bool(self.dashboard_password)
 
     def source_credentials(self) -> dict[str, dict[str, str | None]]:
         """Credential bundles keyed by source name.

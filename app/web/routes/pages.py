@@ -10,11 +10,13 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.logging_setup import get_logger
+from app.models import User
 from app.models.base import KANBAN_ORDER, JobStatus
 from app.services import jobs_query as q
 from app.services.actions import add_note, get_job, set_status, update_application_fields
 from app.services.preferences import load_preferences, load_profile, save_preferences, save_profile
 from app.services.resumes import application_assistant, list_resumes, save_resume
+from app.web.deps import current_user
 from app.web.templating import templates
 
 log = get_logger("pages")
@@ -22,14 +24,14 @@ router = APIRouter()
 
 
 @router.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def dashboard(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)) -> HTMLResponse:
     filters = q.JobFilters.from_query(dict(request.query_params))
-    page = q.search_jobs(db, filters)
+    page = q.search_jobs(db, filters, user)
     return templates.TemplateResponse(
         request,
         "dashboard.html",
         {
-            "counts": q.dashboard_counts(db),
+            "counts": q.dashboard_counts(db, user),
             "page": page,
             "filters": filters,
             "facets": q.facet_values(db),
@@ -39,10 +41,10 @@ def dashboard(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 
 
 @router.get("/jobs", response_class=HTMLResponse)
-def job_list(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def job_list(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)) -> HTMLResponse:
     """HTMX partial: just the results table."""
     filters = q.JobFilters.from_query(dict(request.query_params))
-    page = q.search_jobs(db, filters)
+    page = q.search_jobs(db, filters, user)
     return templates.TemplateResponse(
         request, "partials/job_list.html", {"page": page, "filters": filters}
     )
@@ -83,6 +85,7 @@ def job_status(
     status: str = Form(...),
     redirect_to: str = Form("/"),
     db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     job = get_job(db, job_id)
     if job is None:
@@ -92,7 +95,7 @@ def job_status(
     except ValueError:
         return HTMLResponse("Invalid status", status_code=400)
 
-    set_status(db, job, new_status)
+    set_status(db, job, new_status, user)
     db.commit()
 
     # HTMX inline actions swap just the card's action bar.
@@ -108,11 +111,12 @@ def job_note(
     job_id: str,
     body: str = Form(...),
     db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     job = get_job(db, job_id)
     if job is None:
         return HTMLResponse("Job not found", status_code=404)
-    add_note(db, job, body)
+    add_note(db, job, body, user)
     db.commit()
     return RedirectResponse(f"/job/{job_id}", status_code=303)
 
@@ -128,6 +132,7 @@ def job_application(
     referral: str = Form(""),
     follow_up_at: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     job = get_job(db, job_id)
     if job is None:
@@ -149,14 +154,14 @@ def job_application(
 
 
 @router.get("/tracker", response_class=HTMLResponse)
-def tracker(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def tracker(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "tracker.html",
         {
-            "board": q.kanban_board(db),
+            "board": q.kanban_board(db, user),
             "columns": list(KANBAN_ORDER) + [JobStatus.REJECTED],
-            "counts": q.dashboard_counts(db),
+            "counts": q.dashboard_counts(db, user),
         },
     )
 

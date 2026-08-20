@@ -264,6 +264,32 @@ Schedule changes apply immediately — no restart.
 
 ---
 
+## Accounts and sharing
+
+One instance can serve several people. The expensive half — crawling hundreds of
+boards, deduplicating, discovering employers — happens **once** and is shared;
+everything subjective is per account.
+
+| Shared | Per account |
+|---|---|
+| Jobs, listings, companies, ATS registry | Preferences, thresholds, weights |
+| Search runs and coverage | Candidate profile and resumes |
+| Deduplication | Status, tracker, notes |
+| | Notification history and digest email |
+
+The consequence that matters: **your friend marking a job "applied" does not
+silence it for you.** Status lives in `user_job_state`, keyed by
+`(user_id, job_id)`, because what you have done about a posting is an opinion,
+not a fact about the posting. Rows are created only when someone makes a
+decision, so the table stays proportional to decisions rather than to the
+thousands of jobs crawled.
+
+Adding someone costs one signup and almost no extra runtime: the same crawl
+feeds their digest, scored against their own thresholds and sent to their own
+address.
+
+---
+
 ## Dashboard
 
 | Page | What it does |
@@ -457,9 +483,7 @@ its own and can sleep, restart or be rebuilt without losing anything or missing
 a digest.
 
 1. At <https://render.com>, *New → Blueprint*, point it at this repository.
-2. Set the two secrets it asks for: `DATABASE_URL` (the Neon string) and
-   `DASHBOARD_PASSWORD` (anything long — the dashboard shows your profile,
-   resumes and tracker, so this is not optional on a public URL).
+2. Set the one secret it asks for: `DATABASE_URL` (the Neon string).
 3. Once it is live, add the URL as a **`PUBLIC_BASE_URL` GitHub secret**, so
    the "View the full dashboard" link in each digest points at it instead of
    falling back to `localhost`.
@@ -504,15 +528,15 @@ fly secrets set \
   SMTP_USER=you@gmail.com \
   SMTP_PASSWORD='your-app-password' \
   EMAIL_TO=you@andrew.cmu.edu \
-  DASHBOARD_PASSWORD='pick-something-long' \
+\
   PUBLIC_BASE_URL=https://<your-app-name>.fly.dev
 
 fly deploy
 fly logs                    # watch the migration, scheduler start, and seed
 ```
 
-Then open `https://<your-app-name>.fly.dev`, log in with `me` and your
-`DASHBOARD_PASSWORD`, and set **Notifications → Provider** to `email`.
+Then open `https://<your-app-name>.fly.dev`, create your account, and set
+**Notifications → Provider** to `email`.
 
 Two settings in `fly.toml` are load-bearing:
 
@@ -531,16 +555,22 @@ block; the image already installs the `postgres` extra.
 
 ---
 
-### Securing a public deployment
+### Accounts
 
-The dashboard exposes your profile, resumes, notes and application tracker.
-Setting `DASHBOARD_PASSWORD` puts HTTP basic auth in front of every page and
-every `/api` route; only `/health` stays open, because the platform's health
-check runs unauthenticated. With the variable unset the app logs a warning and
-stays open — fine on `127.0.0.1`, never on a public host.
+The dashboard has real accounts: scrypt-hashed passwords and an HMAC-signed
+session cookie, both stdlib, no session store. Every page and every `/api`
+route requires one; only `/health` and the sign-in pages are open, because the
+platform's health check runs unauthenticated.
 
-The free option never exposes a public dashboard at all, so it has no such
-surface: the only credentials that leave your machine are GitHub secrets.
+The signing key is persisted in the database rather than generated per process,
+because a free host stops the web service whenever it is idle and a
+process-local key would log everyone out several times a day.
+
+**Upgrading an instance that predates accounts:** the first person to sign up
+adopts the existing `me@localhost` row, keeping its tracker, preferences and
+profile. That only happens while no account has a password, so an established
+instance can never be claimed by a stranger. Everyone who signs up afterwards
+gets their own account.
 
 ---
 

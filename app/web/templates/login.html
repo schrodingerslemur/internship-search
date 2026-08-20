@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% set hide_nav = true %}
+{% block title %}{{ "Sign in" if mode == "login" else "Create account" }} · Internship Search{% endblock %}
+
+{% block content %}
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="auth-brand">🚀 Internship Search</div>
+    <h1 class="auth-title">{{ "Sign in" if mode == "login" else "Create your account" }}</h1>
+    <p class="auth-sub">
+      {% if mode == "login" %}
+        Your jobs, your tracker, your digests.
+      {% else %}
+        Your own preferences and email digest. The job search itself is shared,
+        so you see everything found — but your decisions stay yours.
+      {% endif %}
+    </p>
+
+    {% if error %}<div class="auth-error">{{ error }}</div>{% endif %}
+
+    <form method="post" action="{{ '/login' if mode == 'login' else '/signup' }}" class="auth-form">
+      {% if mode == "signup" %}
+      <label>
+        <span>Name</span>
+        <input type="text" name="name" value="{{ name or '' }}" autocomplete="name" placeholder="Optional">
+      </label>
+      {% endif %}
+      <label>
+        <span>Email</span>
+        <input type="email" name="email" value="{{ email or '' }}" required autofocus
+               autocomplete="username" placeholder="you@example.com">
+      </label>
+      <label>
+        <span>Password</span>
+        <input type="password" name="password" required
+               autocomplete="{{ 'current-password' if mode == 'login' else 'new-password' }}"
+               placeholder="{{ 'At least 8 characters' if mode == 'signup' else '' }}">
+      </label>
+      <button class="btn primary" type="submit">
+        {{ "Sign in" if mode == "login" else "Create account" }}
+      </button>
+    </form>
+
+    <div class="auth-alt">
+      {% if mode == "login" %}
+        No account yet? <a href="/signup">Create one</a>
+      {% else %}
+        Already have one? <a href="/login">Sign in</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

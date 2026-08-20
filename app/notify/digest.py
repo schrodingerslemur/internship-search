@@ -22,28 +22,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import Job, Notification, NotificationItem
+from app.models import Job, Notification, NotificationItem, User
 from app.models.base import (
     Freshness,
-    JobStatus,
     NotificationKind,
     Priority,
     utcnow,
 )
 from app.notify.base import NotificationMessage
 from app.schemas.preferences import NotificationRules
+from app.services import user_jobs
 
-#: Statuses that mean the user has already dealt with a job.
-ACTED_ON: frozenset[str] = frozenset(
-    {
-        JobStatus.DISMISSED.value,
-        JobStatus.APPLIED.value,
-        JobStatus.ASSESSMENT.value,
-        JobStatus.INTERVIEW.value,
-        JobStatus.OFFER.value,
-        JobStatus.REJECTED.value,
-    }
-)
+#: Statuses that mean this user has already dealt with a job. Re-exported from
+#: the per-user state service so there is exactly one definition.
+ACTED_ON = user_jobs.ACTED_ON
 
 
 @dataclass
@@ -60,12 +52,17 @@ class DigestSelection:
         return not self.jobs
 
 
-def already_notified_job_ids(session: Session) -> set[int]:
-    rows = session.scalars(select(NotificationItem.job_id)).all()
-    return set(rows)
+def already_notified_job_ids(session: Session, user: User) -> set[int]:
+    """Jobs this user has been told about. Another user's digest is irrelevant."""
+    return user_jobs.notified_job_ids(session, user)
 
 
-def last_notified_at(session: Session, job_id: int) -> datetime | None:
+def last_notified_at(session: Session, job_id: int, user: User | None = None) -> datetime | None:
+    if user is not None:
+        state = user_jobs.get_state(session, user, job_id)
+        if state is not None:
+            return state.notified_at
+        return None
     row = session.scalar(
         select(Notification.sent_at)
         .join(NotificationItem, NotificationItem.notification_id == Notification.id)
@@ -80,11 +77,15 @@ def select_jobs_for_digest(
     session: Session,
     rules: NotificationRules,
     *,
+    user: User | None = None,
     now: datetime | None = None,
     candidate_ids: list[int] | None = None,
 ) -> DigestSelection:
-    """Choose which jobs deserve a place in the next notification."""
+    """Choose which jobs deserve a place in this user's next notification."""
+    from app.services.preferences import get_or_create_user
+
     now = now or utcnow()
+    user = user or get_or_create_user(session)
     selection = DigestSelection()
 
     query = select(Job).where(Job.is_active.is_(True), Job.relevance_score >= rules.min_score)
@@ -92,10 +93,11 @@ def select_jobs_for_digest(
         query = query.where(Job.id.in_(candidate_ids))
     jobs = session.scalars(query.order_by(Job.relevance_score.desc())).all()
 
-    notified = already_notified_job_ids(session)
+    notified = already_notified_job_ids(session, user)
+    acted_on = user_jobs.acted_on_job_ids(session, user)
 
     for job in jobs:
-        if job.status in ACTED_ON and not rules.include_dismissed:
+        if job.id in acted_on and not rules.include_dismissed:
             continue
 
         if job.id not in notified:
@@ -105,7 +107,7 @@ def select_jobs_for_digest(
             # only after the cooldown, so a busy job cannot spam the user.
             if not rules.notify_on_updates or job.freshness != Freshness.UPDATED.value:
                 continue
-            previous = last_notified_at(session, job.id)
+            previous = last_notified_at(session, job.id, user)
             if previous and (now - previous) < timedelta(hours=rules.update_cooldown_hours):
                 continue
             reason = "update"

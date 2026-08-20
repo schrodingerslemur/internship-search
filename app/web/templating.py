@@ -10,7 +10,18 @@ from app.config import PROJECT_ROOT
 from app.models.base import Priority, utcnow
 
 TEMPLATE_DIR = PROJECT_ROOT / "app" / "web" / "templates"
-templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
+
+
+def _account_context(request) -> dict:
+    """Make the signed-in account available to every template.
+
+    A context processor rather than a per-route context key, so adding a page
+    can never accidentally lose the account menu.
+    """
+    return {"current_user": getattr(request.state, "user", None)}
+
+
+templates = Jinja2Templates(directory=str(TEMPLATE_DIR), context_processors=[_account_context])
 
 
 def timeago(value: datetime | None) -> str:

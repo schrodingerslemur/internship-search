@@ -298,24 +298,35 @@ async def run_search(
     # ---- notify ----
     if notify:
         with session_scope() as session:
-            prefs_now = load_preferences(session)
             from app.notify.engine import send_digest
+            from app.services.preferences import all_active_users
 
             # Digest links must be clickable from a phone, so the deployed
             # URL wins over the bind address whenever it is configured.
             base_url = settings.public_base_url or f"http://{settings.app_host}:{settings.app_port}"
-            notification, result = await send_digest(
-                session,
-                prefs_now.notifications,
-                notification_kind,
-                run_id=report.run_id,
-                base_url=base_url,
-                stats={"new_jobs": report.new_jobs},
-                now=utcnow(),
-                dry_run=dry_run,
-            )
-            if notification is not None and result is not None and result.ok:
-                report.notifications_sent = 1
+
+            # One crawl, many inboxes: each account is scored against its own
+            # thresholds and sent to its own address. A failure for one user
+            # must not cost everybody else their digest.
+            for user in all_active_users(session):
+                prefs_now = load_preferences(session, user=user)
+                try:
+                    notification, result = await send_digest(
+                        session,
+                        prefs_now.notifications,
+                        notification_kind,
+                        user=user,
+                        run_id=report.run_id,
+                        base_url=base_url,
+                        stats={"new_jobs": report.new_jobs},
+                        now=utcnow(),
+                        dry_run=dry_run,
+                    )
+                except Exception:
+                    log.exception("run.notify_failed", user_id=user.id)
+                    continue
+                if notification is not None and result is not None and result.ok:
+                    report.notifications_sent += 1
 
     report.duration_seconds = time.monotonic() - started
     report.status = (

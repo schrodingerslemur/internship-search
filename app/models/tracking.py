@@ -22,12 +22,21 @@ from app.models.base import Base, RunStatus, SourceHealth, TimestampMixin
 
 
 class Application(Base, TimestampMixin):
-    """The user's relationship with one canonical job (Kanban card)."""
+    """One user's Kanban card for one canonical job.
+
+    Scoped per user for the same reason status is: two people can both be
+    applying to the same posting, with different resumes, notes and dates.
+    """
 
     __tablename__ = "applications"
-    __table_args__ = (UniqueConstraint("job_id", name="uq_application_job"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "job_id", name="uq_application_user_job"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="saved", index=True)
 

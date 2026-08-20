@@ -8,8 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.logging_setup import get_logger
-from app.models import Application, ApplicationNote, Job, JobEvent
+from app.models import Application, ApplicationNote, Job, JobEvent, User
 from app.models.base import JobStatus, utcnow
+from app.services import user_jobs
 
 log = get_logger("actions")
 
@@ -24,24 +25,43 @@ STATUS_DATE_FIELD: dict[str, str] = {
 }
 
 
-def get_or_create_application(session: Session, job: Job) -> Application:
-    application = session.scalar(select(Application).where(Application.job_id == job.id))
+def get_or_create_application(session: Session, job: Job, user: User) -> Application:
+    application = session.scalar(
+        select(Application).where(
+            Application.job_id == job.id, Application.user_id == user.id
+        )
+    )
     if application is None:
-        application = Application(job_id=job.id, status=job.status, deadline=job.deadline)
+        state = user_jobs.get_state(session, user, job)
+        application = Application(
+            user_id=user.id,
+            job_id=job.id,
+            status=user_jobs.status_of(state),
+            deadline=job.deadline,
+        )
         session.add(application)
         session.flush()
     return application
 
 
 def set_status(
-    session: Session, job: Job, status: JobStatus, *, now: datetime | None = None
+    session: Session,
+    job: Job,
+    status: JobStatus,
+    user: User,
+    *,
+    now: datetime | None = None,
 ) -> Application:
-    """Move a job to a new tracker state, stamping the relevant date."""
-    now = now or utcnow()
-    previous = job.status
-    job.status = status.value
+    """Move a job to a new tracker state for this user, stamping the date.
 
-    application = get_or_create_application(session, job)
+    The decision is recorded against the user, never against the shared job
+    row: someone else applying to a posting must not silence it for you.
+    """
+    now = now or utcnow()
+    previous = user_jobs.status_of(user_jobs.get_state(session, user, job))
+    user_jobs.set_status(session, user, job, status.value, now=now)
+
+    application = get_or_create_application(session, job, user)
     application.status = status.value
 
     field = STATUS_DATE_FIELD.get(status.value)
@@ -61,24 +81,26 @@ def set_status(
         )
     )
     session.flush()
-    log.info("actions.status", job_id=job.id, status=status.value)
+    log.info("actions.status", job_id=job.id, user_id=user.id, status=status.value)
     return application
 
 
-def add_note(session: Session, job: Job, body: str) -> ApplicationNote | None:
+def add_note(session: Session, job: Job, body: str, user: User) -> ApplicationNote | None:
     body = (body or "").strip()
     if not body:
         return None
-    application = get_or_create_application(session, job)
+    application = get_or_create_application(session, job, user)
     note = ApplicationNote(application_id=application.id, body=body, created_at=utcnow())
     session.add(note)
     session.flush()
     return note
 
 
-def update_application_fields(session: Session, job: Job, data: dict) -> Application:
+def update_application_fields(
+    session: Session, job: Job, data: dict, user: User
+) -> Application:
     """Update tracker metadata (resume used, contact, referral, follow-up)."""
-    application = get_or_create_application(session, job)
+    application = get_or_create_application(session, job, user)
     for name in (
         "resume_version",
         "cover_letter_version",

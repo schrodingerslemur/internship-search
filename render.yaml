@@ -5,8 +5,12 @@
 # holds no state of its own: it can sleep, restart or be rebuilt without
 # losing anything or missing a digest.
 #
-# Set in the Render dashboard (marked sync: false below, so they are never
-# committed): DATABASE_URL and DASHBOARD_PASSWORD.
+# Set in the Render dashboard (marked sync: false below, so it is never
+# committed): DATABASE_URL.
+#
+# There is no dashboard password: the app has real accounts. The first person
+# to sign up adopts the existing single-user data; everyone after that gets
+# their own account, preferences and digest.
 
 services:
   - type: web
@@ -22,12 +26,6 @@ services:
       # The Neon connection string, pasted as given.
       - key: DATABASE_URL
         sync: false
-      # Required. Without it the dashboard -- profile, resumes, tracker --
-      # would be readable by anyone who finds the URL.
-      - key: DASHBOARD_PASSWORD
-        sync: false
-      - key: DASHBOARD_USER
-        value: me
       # The GitHub Actions workflow owns the schedule. A second scheduler here
       # would send every digest twice.
       - key: SCHEDULER_ENABLED

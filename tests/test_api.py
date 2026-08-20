@@ -16,9 +16,24 @@ from tests.conftest import NOW
 
 @pytest.fixture
 def client(session):
+    """A signed-in client. Every page and API route requires an account."""
+    from app.services import auth
+
     app = create_app()
     app.dependency_overrides[get_db] = lambda: session
     with TestClient(app) as c:
+        auth.create_account(session, email="tester@example.com", password="a-good-password")
+        session.flush()
+        c.post("/login", data={"email": "tester@example.com", "password": "a-good-password"})
+        yield c
+
+
+@pytest.fixture
+def anon_client(session):
+    """A signed-out client, for checking that access is actually gated."""
+    app = create_app()
+    app.dependency_overrides[get_db] = lambda: session
+    with TestClient(app, follow_redirects=False) as c:
         yield c
 
 
@@ -105,9 +120,14 @@ class TestJobsApi:
 
 class TestActions:
     def test_save_a_job(self, client, seeded, session):
+        from app.services import auth, user_jobs
+
         response = client.post("/api/jobs/1/status", json={"status": "saved"})
         assert response.json()["status"] == "saved"
-        assert session.get(Job, 1).status == JobStatus.SAVED.value
+
+        # Recorded against the signed-in account, not the shared job row.
+        user = auth.find_by_email(session, "tester@example.com")
+        assert user_jobs.status_of(user_jobs.get_state(session, user, 1)) == "saved"
 
     def test_dismiss_hides_from_default_list(self, client, seeded):
         client.post("/api/jobs/3/status", json={"status": "dismissed"})
@@ -261,45 +281,26 @@ class TestPages:
         assert prefs["roles"][0]["weight"] == 2.0
 
 
-class TestDashboardAuth:
-    """A public deployment must not expose the profile and tracker to anyone."""
+class TestAccessControl:
+    """Session auth replaced HTTP basic auth; the guarantee is unchanged."""
 
-    @pytest.fixture
-    def protected_client(self, session, monkeypatch):
-        import app.main as main
+    def test_pages_require_signing_in(self, anon_client):
+        response = anon_client.get("/")
+        assert response.status_code == 303
+        assert response.headers["location"] == "/login"
 
-        settings = main.get_settings()
-        monkeypatch.setattr(settings, "dashboard_user", "me", raising=False)
-        monkeypatch.setattr(settings, "dashboard_password", "s3cret", raising=False)
-        app = main.create_app()
-        app.dependency_overrides[get_db] = lambda: session
-        with TestClient(app) as c:
-            yield c
+    def test_api_requires_signing_in(self, anon_client):
+        assert anon_client.get("/api/jobs").status_code == 401
 
-    def test_unauthenticated_request_is_rejected(self, protected_client):
-        response = protected_client.get("/")
-        assert response.status_code == 401
-        assert "Basic" in response.headers["www-authenticate"]
+    def test_health_check_stays_open(self, anon_client):
+        """The platform health check runs unauthenticated; gating it fails deploys."""
+        assert anon_client.get("/health").status_code == 200
 
-    def test_api_is_protected_too(self, protected_client):
-        assert protected_client.get("/api/jobs").status_code == 401
+    def test_static_assets_stay_open(self, anon_client):
+        """The login page needs its own stylesheet before anyone is signed in."""
+        assert anon_client.get("/static/htmx.min.js").status_code in (200, 404)
 
-    def test_correct_credentials_are_accepted(self, protected_client):
-        assert protected_client.get("/", auth=("me", "s3cret")).status_code == 200
-
-    def test_wrong_password_is_rejected(self, protected_client):
-        assert protected_client.get("/", auth=("me", "wrong")).status_code == 401
-
-    def test_malformed_header_is_rejected_not_crashed(self, protected_client):
-        response = protected_client.get("/", headers={"Authorization": "Basic not-base64!!"})
-        assert response.status_code == 401
-
-    def test_health_check_stays_open(self, protected_client):
-        """Fly's health check runs unauthenticated; gating it fails the deploy."""
-        assert protected_client.get("/health").status_code == 200
-
-    def test_no_password_means_no_gate(self, client):
-        assert client.get("/health").status_code == 200
+    def test_a_signed_in_client_gets_through(self, client):
         assert client.get("/").status_code == 200
 
 

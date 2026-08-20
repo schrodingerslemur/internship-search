@@ -10,19 +10,46 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
 
 
 class User(Base, TimestampMixin):
+    """An account. Everything subjective about a job hangs off one of these.
+
+    The job pool is shared -- crawled once, deduplicated once -- while
+    preferences, the candidate profile, resumes, digest delivery and the
+    application tracker are all per user. Two people searching from the same
+    instance never see each other's decisions.
+    """
+
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str | None] = mapped_column(String(320), unique=True)
     name: Mapped[str | None] = mapped_column(String(200))
     timezone: Mapped[str] = mapped_column(String(64), default="America/New_York")
+
+    #: scrypt hash; never the password itself. Null means the account cannot
+    #: log in yet -- the pre-accounts single user is migrated in this state.
+    password_hash: Mapped[str | None] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    #: Where this user's digests go. Falls back to ``email`` when unset.
+    digest_email: Mapped[str | None] = mapped_column(String(320))
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     preference: Mapped[UserPreference | None] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"
@@ -33,6 +60,45 @@ class User(Base, TimestampMixin):
     resumes: Mapped[list[Resume]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    job_states: Mapped[list[UserJobState]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+    @property
+    def notification_email(self) -> str | None:
+        return self.digest_email or self.email
+
+
+class UserJobState(Base, TimestampMixin):
+    """One user's relationship to one shared job.
+
+    Status and notification history live here rather than on ``Job`` because
+    they are opinions, not facts: your having applied to a posting says
+    nothing about whether anyone else has, and must not silence it for them.
+    """
+
+    __tablename__ = "user_job_state"
+    __table_args__ = (
+        UniqueConstraint("user_id", "job_id", name="uq_user_job_state_user_id_job_id"),
+        Index("ix_user_job_state_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    status: Mapped[str] = mapped_column(String(30), default="new", nullable=False, index=True)
+    notified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime)
+    saved_at: Mapped[datetime | None] = mapped_column(DateTime)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    user: Mapped[User] = relationship(back_populates="job_states")
+    job: Mapped["Job"] = relationship()  # noqa: F821, UP037 - string ref: Job is in another module
 
 
 class UserPreference(Base, TimestampMixin):
@@ -131,3 +197,18 @@ class Resume(Base, TimestampMixin):
     uploaded_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     user: Mapped[User] = relationship(back_populates="resumes")
+
+
+class AppConfig(Base, TimestampMixin):
+    """Deployment-owned key/value settings that must survive a restart.
+
+    The session signing key lives here: a free host stops the web service
+    whenever it is idle, and a key held only in process memory would log
+    everyone out every time it woke up.
+    """
+
+    __tablename__ = "app_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)

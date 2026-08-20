@@ -16,6 +16,21 @@ from app.notify.providers import EmailProvider, FileProvider, TelegramProvider, 
 from tests.conftest import NOW
 
 
+@pytest.fixture
+def user(session):
+    from app.services.preferences import get_or_create_user
+
+    return get_or_create_user(session)
+
+
+def set_job_status(session, job, status):
+    """Record a decision the way the application does -- against a user."""
+    from app.services import user_jobs
+    from app.services.preferences import get_or_create_user
+
+    user_jobs.set_status(session, get_or_create_user(session), job, status)
+
+
 def make_job(session, **kwargs) -> Job:
     defaults = dict(
         canonical_job_id=kwargs.pop("cid", f"cid-{kwargs.get('title', 'x')}-{id(kwargs)}"),
@@ -64,11 +79,11 @@ class TestSelection:
         assert len(select_jobs_for_digest(session, rules, now=NOW).jobs) == 1
 
     def test_dismissed_job_is_never_sent(self, session, rules):
-        make_job(session, cid="d", status=JobStatus.DISMISSED.value)
+        set_job_status(session, make_job(session, cid="d"), JobStatus.DISMISSED.value)
         assert select_jobs_for_digest(session, rules, now=NOW).is_empty
 
     def test_applied_job_is_never_sent(self, session, rules):
-        make_job(session, cid="e", status=JobStatus.APPLIED.value)
+        set_job_status(session, make_job(session, cid="e"), JobStatus.APPLIED.value)
         assert select_jobs_for_digest(session, rules, now=NOW).is_empty
 
     def test_inactive_job_is_never_sent(self, session, rules):
@@ -99,6 +114,11 @@ class TestRepeatSuppression:
         session.add(notification)
         session.flush()
         session.add(NotificationItem(notification_id=notification.id, job_id=job.id, reason="new"))
+        # The authoritative record of "this user has seen this job".
+        from app.services import user_jobs
+        from app.services.preferences import get_or_create_user
+
+        user_jobs.mark_notified(session, get_or_create_user(session), job, now=when or NOW)
         session.flush()
 
     def test_already_notified_job_is_not_resent(self, session, rules):
@@ -210,8 +230,14 @@ class TestDispatch:
         assert result.ok
         assert notification.status == "sent"
         assert notification.job_count == 1
+
+        # Marked against the account that was sent to, not on the shared job.
+        from app.services import user_jobs
+        from app.services.preferences import get_or_create_user
+
         job = session.query(Job).first()
-        assert job.notified is True
+        state = user_jobs.get_state(session, get_or_create_user(session), job)
+        assert state.notified is True
 
     async def test_second_run_sends_nothing_new(self, session, rules):
         make_job(session, cid="u")
@@ -454,20 +480,22 @@ class TestAppliedJobsStopAlerting:
     )
     def test_acted_on_jobs_are_never_re_alerted(self, session, rules, status):
         job = make_job(session, cid=f"cid-{status}")
-        job.status = status
-        session.flush()
+        set_job_status(session, job, status)
 
         selection = select_jobs_for_digest(session, rules, now=NOW)
         assert job.id not in [j.id for j in selection.jobs]
 
     def test_but_the_job_itself_is_still_there(self, session, rules):
         """Silenced, not deleted -- the tracker must keep every application."""
+        from app.services import user_jobs
+        from app.services.preferences import get_or_create_user
+
         job = make_job(session, cid="cid-applied")
-        job.status = JobStatus.APPLIED.value
-        session.flush()
+        set_job_status(session, job, JobStatus.APPLIED.value)
 
         stored = session.query(Job).filter(Job.id == job.id).one()
-        assert stored.status == JobStatus.APPLIED.value
+        state = user_jobs.get_state(session, get_or_create_user(session), stored)
+        assert state.status == JobStatus.APPLIED.value
         assert stored.is_active is True
         assert stored.application_url
 
@@ -478,7 +506,8 @@ class TestAppliedJobsStopAlerting:
         from app.services.persistence import expire_stale_jobs
 
         applied = make_job(session, cid="cid-keep")
-        applied.status = JobStatus.APPLIED.value
+        applied.status = JobStatus.APPLIED.value  # expiry still reads the shared row
+        set_job_status(session, applied, JobStatus.APPLIED.value)
         applied.last_seen_at = NOW - timedelta(days=90)
 
         ignored = make_job(session, cid="cid-drop")
@@ -494,8 +523,7 @@ class TestAppliedJobsStopAlerting:
     def test_a_saved_job_still_gets_alerts_until_acted_on(self, session, rules):
         """Saving is a bookmark, not a decision -- it should not silence a job."""
         job = make_job(session, cid="cid-saved")
-        job.status = JobStatus.SAVED.value
-        session.flush()
+        set_job_status(session, job, JobStatus.SAVED.value)
 
         selection = select_jobs_for_digest(session, rules, now=NOW)
         assert job.id in [j.id for j in selection.jobs]

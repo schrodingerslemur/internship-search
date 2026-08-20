@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Job, JobSourceRecord
+from app.models import Job, JobSourceRecord, User
 from app.models.base import JobStatus
 from app.schemas.preferences import SearchPreferences
 from app.schemas.profile import CandidateProfileData
@@ -22,6 +22,7 @@ from app.services import jobs_query as q
 from app.services.actions import add_note, get_job, set_status
 from app.services.learning import analytics_payload
 from app.services.preferences import load_preferences, load_profile, save_preferences, save_profile
+from app.web.deps import current_user
 
 router = APIRouter(tags=["api"])
 
@@ -90,10 +91,10 @@ def _serialize_job(job: Job, *, detail: bool = False) -> dict[str, Any]:
 
 
 @router.get("/jobs")
-def list_jobs(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+def list_jobs(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
     """Canonical, deduplicated job list. One row per underlying position."""
     filters = q.JobFilters.from_query(dict(request.query_params))
-    page = q.search_jobs(db, filters)
+    page = q.search_jobs(db, filters, user)
     return {
         "total": page.total,
         "page": page.page,
@@ -113,7 +114,10 @@ def job_detail(job_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @router.post("/jobs/{job_id}/status")
 def change_status(
-    job_id: str, payload: dict = Body(...), db: Session = Depends(get_db)
+    job_id: str,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ) -> dict[str, Any]:
     job = get_job(db, job_id)
     if job is None:
@@ -122,19 +126,22 @@ def change_status(
         status = JobStatus(str(payload.get("status", "")))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="invalid status") from exc
-    set_status(db, job, status)
+    set_status(db, job, status, user)
     db.commit()
-    return {"ok": True, "job_id": job.id, "status": job.status}
+    return {"ok": True, "job_id": job.id, "status": status.value}
 
 
 @router.post("/jobs/{job_id}/notes")
 def create_note(
-    job_id: str, payload: dict = Body(...), db: Session = Depends(get_db)
+    job_id: str,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ) -> dict[str, Any]:
     job = get_job(db, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
-    note = add_note(db, job, str(payload.get("body", "")))
+    note = add_note(db, job, str(payload.get("body", "")), user)
     db.commit()
     if note is None:
         raise HTTPException(status_code=400, detail="empty note")
@@ -142,8 +149,8 @@ def create_note(
 
 
 @router.get("/counts")
-def counts(db: Session = Depends(get_db)) -> dict[str, int]:
-    return q.dashboard_counts(db)
+def counts(db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, int]:
+    return q.dashboard_counts(db, user)
 
 
 @router.get("/preferences")

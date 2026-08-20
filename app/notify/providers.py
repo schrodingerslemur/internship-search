@@ -99,7 +99,7 @@ class EmailProvider(NotificationProvider):
     display_name = "Email (SMTP)"
     required_config = ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "EMAIL_TO")
 
-    def __init__(self) -> None:
+    def __init__(self, recipient: str | None = None) -> None:
         settings = get_settings()
         self.host = settings.smtp_host
         self.port = settings.smtp_port
@@ -107,8 +107,11 @@ class EmailProvider(NotificationProvider):
         self.password = settings.smtp_password
         self.starttls = settings.smtp_starttls
         self.sender = settings.email_sender
+        # Each account's digest goes to that account's own address; EMAIL_TO is
+        # the deployment-wide fallback for a user who has not set one.
+        raw = recipient or settings.email_to or ""
         # A comma-separated list is accepted so a digest can go to two inboxes.
-        self.recipients = [r.strip() for r in (settings.email_to or "").split(",") if r.strip()]
+        self.recipients = [r.strip() for r in raw.split(",") if r.strip()]
 
     def is_configured(self) -> bool:
         return bool(self.host and self.password and self.sender and self.recipients)
@@ -225,17 +228,21 @@ PROVIDERS: dict[str, type[NotificationProvider]] = {
 FALLBACK_ORDER: tuple[str, ...] = (EmailProvider.name, TelegramProvider.name)
 
 
-def get_provider(name: str) -> NotificationProvider:
+def get_provider(name: str, *, recipient: str | None = None) -> NotificationProvider:
     """Instantiate a provider, degrading to a real channel and then to a file.
 
     Degrading rather than failing means a digest is never lost just because
     the selected channel was never finished being set up.
     """
+    def build(provider_cls) -> NotificationProvider:
+        # Only the email provider is addressed; a chat channel has one target.
+        return provider_cls(recipient) if provider_cls is EmailProvider else provider_cls()
+
     cls = PROVIDERS.get(name)
     if cls is None:
         log.warning("notify.unknown_provider", provider=name)
     else:
-        provider = cls()
+        provider = build(cls)
         if provider.is_configured():
             return provider
         log.warning("notify.provider_unconfigured", provider=name)
@@ -243,7 +250,7 @@ def get_provider(name: str) -> NotificationProvider:
     for fallback in FALLBACK_ORDER:
         if fallback == name:
             continue
-        candidate = PROVIDERS[fallback]()
+        candidate = build(PROVIDERS[fallback])
         if candidate.is_configured():
             log.info("notify.provider_fallback", requested=name, using=fallback)
             return candidate
