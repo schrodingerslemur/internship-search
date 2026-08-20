@@ -224,6 +224,7 @@ def _email_job_row(
     score_override: float | None = None,
     reasons_override: list | None = None,
     priority_override: str | None = None,
+    links: dict[str, str] | None = None,
 ) -> str:
     score = int(round(score_override if score_override is not None else (job.relevance_score or 0)))
     color = _PRIORITY_COLORS.get(priority_override or job.priority, "#6b7280")
@@ -250,12 +251,28 @@ def _email_job_row(
             f'<div style="font:400 13px/1.5 {_FONT};color:#444;">{escape(reasons)}</div>'
         )
     parts.append(f'<div style="font:400 13px/1.5 {_FONT};color:#666;">&#128205; {meta}</div>')
-    parts.append(
-        f'<div style="padding-top:6px;"><a href="{url}" '
-        f'style="font:600 13px/1 {_FONT};color:#fff;background:#1a5fb4;'
-        'padding:8px 14px;border-radius:6px;text-decoration:none;display:inline-block;">'
-        "Apply</a></div>"
-    )
+    buttons = [
+        f'<a href="{url}" style="font:600 13px/1 {_FONT};color:#fff;background:#1a5fb4;'
+        'padding:9px 14px;border-radius:6px;text-decoration:none;display:inline-block;'
+        'margin:0 6px 6px 0;">Open</a>'
+    ]
+    # One-click triage: acting from the phone you read the digest on is the
+    # difference between clearing it and letting it pile up.
+    for label, key, colour in (
+        ("Applied", "applied", "#2f7d4f"),
+        ("Save", "saved", "#5b6472"),
+        ("Dismiss", "dismissed", "#8a8f98"),
+    ):
+        link = links.get(key) if links else None
+        if not link:
+            continue
+        buttons.append(
+            f'<a href="{escape(link, quote=True)}" style="font:600 13px/1 {_FONT};'
+            f'color:{colour};background:#f1f3f6;padding:9px 12px;border-radius:6px;'
+            'text-decoration:none;display:inline-block;margin:0 6px 6px 0;">'
+            f"{label}</a>"
+        )
+    parts.append(f'<div style="padding-top:8px;">{"".join(buttons)}</div>')
     parts.append("</td></tr>")
     return "".join(parts)
 
@@ -281,6 +298,7 @@ def build_email_html(
     summary_lines: list[str],
     base_url: str,
     now: datetime,
+    action_links: dict[int, dict[str, str]] | None = None,
 ) -> str:
     """Render the digest as a standalone HTML document for email clients."""
     rows = "".join(
@@ -290,6 +308,7 @@ def build_email_html(
             now,
             score_override=selection.scores.get(job.id),
             reasons_override=selection.reasons_by_job.get(job.id),
+            links=(action_links or {}).get(job.id),
         )
         for i, job in enumerate(selection.jobs, start=1)
     )
@@ -328,6 +347,7 @@ def build_digest(
     base_url: str = "http://127.0.0.1:8000",
     now: datetime | None = None,
     stats: dict[str, int] | None = None,
+    action_links: dict[int, dict[str, str]] | None = None,
 ) -> NotificationMessage:
     """Render the digest in plain text and Telegram-flavoured HTML."""
     now = now or utcnow()
@@ -394,6 +414,7 @@ def build_digest(
         summary_lines=[escape(line) for line in header_plain[2:]],
         base_url=base_url,
         now=now,
+        action_links=action_links,
     )
 
     return NotificationMessage(

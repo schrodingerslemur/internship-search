@@ -476,3 +476,139 @@ class TestPerUserScoring:
 
         assert not select_jobs_for_digest(session, rules, user=hardware_person).is_empty
         assert select_jobs_for_digest(session, rules, user=software_person).is_empty
+
+
+class TestOneClickTriage:
+    """Digest buttons must act without a login, and only ever do what they say."""
+
+    KEY = b"triage-signing-key"
+
+    def _token(self, user_id=1, job_id=1, action="dismissed"):
+        from app.services import action_tokens
+
+        return action_tokens.issue(user_id, job_id, action, self.KEY)
+
+    def test_round_trip(self):
+        from app.services import action_tokens
+
+        claims = action_tokens.verify(self._token(7, 42, "applied"), self.KEY)
+        assert claims == {
+            "user_id": 7,
+            "job_id": 42,
+            "action": "applied",
+            "issued_at": claims["issued_at"],
+        }
+
+    def test_a_token_cannot_be_edited_into_another_job(self):
+        from app.services import action_tokens
+
+        token = self._token(1, 1, "dismissed")
+        body, _, signature = token.partition(".")
+        forged = body[:-3] + "AAA." + signature
+        assert action_tokens.verify(forged, self.KEY) is None
+
+    def test_a_token_signed_with_another_key_is_refused(self):
+        from app.services import action_tokens
+
+        assert action_tokens.verify(self._token(), b"not-the-key") is None
+
+    def test_expired_tokens_are_refused(self):
+        import time
+
+        from app.services import action_tokens
+
+        old = action_tokens.issue(
+            1, 1, "saved", self.KEY, now=time.time() - action_tokens.TOKEN_MAX_AGE - 5
+        )
+        assert action_tokens.verify(old, self.KEY) is None
+
+    def test_only_harmless_actions_can_be_signed(self):
+        import pytest as _pytest
+
+        from app.services import action_tokens
+
+        with _pytest.raises(ValueError):
+            action_tokens.issue(1, 1, "delete_account", self.KEY)
+
+    @pytest.mark.parametrize("token", ["", "junk", "a.b", "no-dot"])
+    def test_mangled_links_fail_politely(self, token):
+        from app.services import action_tokens
+
+        assert action_tokens.verify(token, self.KEY) is None
+
+    def test_clicking_dismiss_works_without_signing_in(self, client, session, two_users, a_job):
+        from app.services import action_tokens
+
+        brendan, friend = two_users
+        key = client.app.state.signing_key
+        token = action_tokens.issue(brendan.id, a_job.id, "dismissed", key)
+
+        response = client.get(f"/a/{token}")
+        assert response.status_code == 200
+        assert "Dismissed" in response.text
+
+        assert user_jobs.status_of(user_jobs.get_state(session, brendan, a_job)) == "dismissed"
+        # And only for him.
+        assert user_jobs.status_of(user_jobs.get_state(session, friend, a_job)) == "new"
+
+    def test_a_link_acts_only_on_the_job_it_names(self, client, session, two_users, a_job):
+        from app.services import action_tokens
+
+        brendan, _ = two_users
+        other = Job(
+            canonical_job_id="other-1",
+            fingerprint="fp-other",
+            company_name="AMD",
+            title="Other Intern",
+            application_url="https://example.com/other",
+        )
+        session.add(other)
+        session.flush()
+
+        token = action_tokens.issue(brendan.id, a_job.id, "applied", client.app.state.signing_key)
+        client.get(f"/a/{token}")
+
+        assert user_jobs.get_state(session, brendan, other) is None
+
+    def test_an_invalid_link_explains_itself(self, client):
+        response = client.get("/a/completely-invalid")
+        assert response.status_code == 400
+        assert "no longer valid" in response.text
+
+    def test_the_result_page_offers_the_reverse_action(self, client, session, two_users, a_job):
+        from app.services import action_tokens
+
+        brendan, _ = two_users
+        token = action_tokens.issue(
+            brendan.id, a_job.id, "dismissed", client.app.state.signing_key
+        )
+        response = client.get(f"/a/{token}")
+        assert "Undo" in response.text
+
+    def test_digest_emails_carry_the_buttons(self, session, two_users, a_job):
+        from app.models.base import NotificationKind
+        from app.notify.digest import build_digest, select_jobs_for_digest
+        from app.notify.engine import _action_links
+        from app.schemas.preferences import NotificationRules
+
+        brendan, _ = two_users
+        rules = NotificationRules(provider="file", min_score=50.0)
+        selection = select_jobs_for_digest(session, rules, user=brendan)
+        links = _action_links(selection, brendan, "https://example.com", self.KEY)
+        message = build_digest(
+            selection, NotificationKind.MORNING_DIGEST, action_links=links
+        )
+
+        assert ">Applied</a>" in message.html
+        assert ">Dismiss</a>" in message.html
+        assert "https://example.com/a/" in message.html
+
+    def test_no_signing_key_means_no_broken_buttons(self, session, two_users, a_job):
+        from app.notify.digest import select_jobs_for_digest
+        from app.notify.engine import _action_links
+        from app.schemas.preferences import NotificationRules
+
+        selection = select_jobs_for_digest(
+            session, NotificationRules(provider="file", min_score=50.0), user=two_users[0]
+        )
+        assert _action_links(selection, two_users[0], "https://example.com", None) == {}

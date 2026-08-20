@@ -27,12 +27,35 @@ from app.services import user_jobs
 log = get_logger("notify.engine")
 
 
+def _action_links(
+    selection: DigestSelection, user: User, base_url: str, key: bytes | None
+) -> dict[int, dict[str, str]]:
+    """One signed link per job per action, for triage straight from the inbox.
+
+    Without a signing key -- a CLI run that never started the web app -- the
+    buttons are simply omitted rather than rendered broken.
+    """
+    if not key:
+        return {}
+    from app.services import action_tokens
+
+    root = base_url.rstrip("/")
+    return {
+        job.id: {
+            action: f"{root}/a/{action_tokens.issue(user.id, job.id, action, key)}"
+            for action in ("applied", "saved", "dismissed")
+        }
+        for job in selection.jobs
+    }
+
+
 async def send_digest(
     session: Session,
     rules: NotificationRules,
     kind: NotificationKind,
     *,
     user: User | None = None,
+    signing_key: bytes | None = None,
     run_id: int | None = None,
     base_url: str = "http://127.0.0.1:8000",
     stats: dict[str, int] | None = None,
@@ -59,7 +82,14 @@ async def send_digest(
             return None, None
         message = build_empty_digest(kind, now=now)
     else:
-        message = build_digest(selection, kind, base_url=base_url, now=now, stats=stats)
+        message = build_digest(
+            selection,
+            kind,
+            base_url=base_url,
+            now=now,
+            stats=stats,
+            action_links=_action_links(selection, user, base_url, signing_key),
+        )
 
     return await _dispatch(
         session, rules, kind, message, selection, user=user, run_id=run_id, now=now,

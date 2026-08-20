@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import PROJECT_ROOT, ensure_dirs, get_settings
 from app.logging_setup import configure_logging, get_logger
-from app.web.routes import accounts, api, pages
+from app.web.routes import accounts, api, pages, quick_actions
 
 log = get_logger("main")
 
@@ -78,7 +78,10 @@ def _load_signing_key() -> bytes:
 #: Reachable without a session: the platform health check runs unauthenticated,
 #: and the sign-in pages obviously cannot require being signed in.
 _PUBLIC_PATHS: frozenset[str] = frozenset({"/health", "/login", "/signup", "/logout"})
-_PUBLIC_PREFIXES: tuple[str, ...] = ("/static/",)
+#: ``/a/`` carries its own signed, single-purpose authority -- see
+#: app/services/action_tokens.py. It is deliberately usable from a phone that
+#: has never signed in, which is the entire point of one-click triage.
+_PUBLIC_PREFIXES: tuple[str, ...] = ("/static/", "/a/")
 
 
 def _is_public(path: str) -> bool:
@@ -136,6 +139,7 @@ def create_app() -> FastAPI:
 
     app.include_router(api.router, prefix="/api")
     app.include_router(accounts.router)
+    app.include_router(quick_actions.router)
     app.include_router(pages.router)
 
     @app.exception_handler(Exception)

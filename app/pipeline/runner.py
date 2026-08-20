@@ -300,7 +300,11 @@ async def run_search(
     if notify:
         with session_scope() as session:
             from app.notify.engine import send_digest
+            from app.services.auth import get_signing_key
             from app.services.preferences import all_active_users
+
+            # Same key the web app verifies with, so links minted here work.
+            digest_key = get_signing_key(session)
 
             # Digest links must be clickable from a phone, so the deployed
             # URL wins over the bind address whenever it is configured.
@@ -341,6 +345,7 @@ async def run_search(
                         prefs_now.notifications,
                         notification_kind,
                         user=user,
+                        signing_key=digest_key,
                         run_id=report.run_id,
                         base_url=base_url,
                         stats={"new_jobs": report.new_jobs},

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% set hide_nav = true %}
+{% block title %}{{ headline }} · Internship Search{% endblock %}
+
+{% block content %}
+<div class="auth-wrap">
+  <div class="auth-card" style="text-align:center">
+    <div class="qa-mark {{ 'ok' if ok else 'bad' }}">{{ "✓" if ok else "!" }}</div>
+    <h1 class="auth-title">{{ headline }}</h1>
+
+    {% if job %}
+      <p class="auth-sub" style="margin-bottom:18px">
+        <strong>{{ job.company_name }}</strong><br>{{ job.title }}
+      </p>
+    {% endif %}
+
+    {% if detail %}<p class="auth-sub">{{ detail }}</p>{% endif %}
+
+    {% if ok %}
+      <p class="auth-sub" style="font-size:12.5px">
+        It will not appear in your digests again.
+      </p>
+    {% endif %}
+
+    <div class="qa-actions">
+      {% if job %}
+        <a class="btn primary" href="{{ job.application_url }}" target="_blank" rel="noopener">
+          Open the posting
+        </a>
+      {% endif %}
+      <a class="btn" href="/">Go to dashboard</a>
+    </div>
+
+    {% if undo_url %}
+      <form method="post" action="{{ undo_url }}" style="margin-top:14px">
+        <button type="submit" class="qa-undo">{{ undo_label }}</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+<style>
+.qa-mark{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;
+ margin:0 auto 16px;font-size:22px;font-weight:700}
+.qa-mark.ok{background:rgba(63,185,80,.15);color:var(--ok)}
+.qa-mark.bad{background:rgba(248,81,73,.14);color:var(--bad)}
+.qa-actions{display:grid;gap:8px;margin-top:20px}
+.qa-undo{background:none;border:0;color:var(--muted);font:inherit;font-size:13px;
+ cursor:pointer;text-decoration:underline}
+.qa-undo:hover{color:var(--text)}
+</style>
+{% endblock %}
