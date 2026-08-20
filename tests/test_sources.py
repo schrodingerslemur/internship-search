@@ -353,3 +353,134 @@ class TestRegistry:
 
     def test_every_source_subclasses_the_interface(self):
         assert all(issubclass(c, JobSource) for c in ALL_SOURCE_CLASSES)
+
+
+class TestSpeculativeBoards:
+    """A guessed board token that does not exist is not a source failure.
+
+    Reproduces the first production run, where an empty registry meant the only
+    Greenhouse/Lever/Ashby candidates were guesses derived from the user's
+    preferred companies. All five 404'd -- correctly, since NVIDIA and Google
+    do not use Greenhouse -- and three healthy sources were reported FAILED.
+    """
+
+    def _source(self, per_board):
+        from app.models.base import SourceKind
+        from app.sources.base import BoardJobSource
+
+        class FakeBoards(BoardJobSource):
+            name = "fake_ats"
+            display_name = "Fake ATS"
+            kind = SourceKind.ATS
+            provider = "fake"
+
+            async def fetch_board(self, board, ctx):
+                return per_board(board)
+
+        return FakeBoards()
+
+    def _ctx(self, boards):
+        from app.sources.base import SourceContext
+        from app.sources.http import HttpClient
+
+        return SourceContext(http=HttpClient(), queries=[], boards=boards)
+
+    def _board(self, token, *, speculative=False):
+        board = {"provider": "fake", "board_token": token}
+        if speculative:
+            board["speculative"] = True
+        else:
+            board["id"] = abs(hash(token)) % 10000
+        return board
+
+    async def test_all_speculative_misses_is_not_a_failure(self):
+        from app.sources.base import FetchError
+
+        def miss(board):
+            raise FetchError("HTTP 404")
+
+        source = self._source(miss)
+        boards = [self._board(t, speculative=True) for t in ("nvidia", "amd", "google")]
+
+        jobs = await source.fetch(self._ctx(boards))
+        assert jobs == []
+        assert source._last_board_stats == (0, 0), "guesses must not count as attempts"
+
+    async def test_a_registered_board_failing_is_still_a_failure(self):
+        from app.sources.base import FetchError
+
+        def miss(board):
+            raise FetchError("HTTP 500")
+
+        source = self._source(miss)
+        with pytest.raises(FetchError, match="all 1 registered boards failed"):
+            await source.fetch(self._ctx([self._board("realco")]))
+
+    async def test_speculative_misses_do_not_mask_a_real_failure(self):
+        from app.sources.base import FetchError
+
+        def miss(board):
+            raise FetchError("HTTP 404")
+
+        source = self._source(miss)
+        boards = [self._board("nvidia", speculative=True), self._board("realco")]
+        with pytest.raises(FetchError):
+            await source.fetch(self._ctx(boards))
+        assert source._last_board_stats == (1, 0)
+
+    async def test_a_lucky_guess_still_contributes_its_jobs(self):
+        """Guesses are excluded from health accounting, not from results."""
+        from app.schemas.job import RawJob
+
+        def hit(board):
+            return [
+                RawJob(
+                    source="fake_ats",
+                    source_job_id=f"{board['board_token']}-1",
+                    title="FPGA Intern",
+                    company=board["board_token"],
+                    url="https://example.com/1",
+                )
+            ]
+
+        source = self._source(hit)
+        jobs = await source.fetch(self._ctx([self._board("stripe", speculative=True)]))
+        assert len(jobs) == 1
+        assert source._last_board_stats == (0, 0)
+
+    async def test_health_ratio_counts_only_registered_boards(self):
+        from app.schemas.job import RawJob
+        from app.sources.base import FetchError
+
+        def mixed(board):
+            if board["board_token"] == "goodco":
+                return [
+                    RawJob(
+                        source="fake_ats",
+                        source_job_id="g-1",
+                        title="Intern",
+                        company="goodco",
+                        url="https://example.com/g",
+                    )
+                ]
+            raise FetchError("HTTP 404")
+
+        source = self._source(mixed)
+        boards = [
+            self._board("goodco"),
+            self._board("badco"),
+            self._board("nvidia", speculative=True),
+            self._board("google", speculative=True),
+        ]
+        jobs = await source.fetch(self._ctx(boards))
+        assert len(jobs) == 1
+        # 2 registered attempted, 1 succeeded -- the two guesses are invisible.
+        assert source._last_board_stats == (2, 1)
+
+    def test_seeded_candidates_are_marked_speculative(self, session):
+        from app.pipeline.discovery import seed_boards_for_companies
+
+        candidates = seed_boards_for_companies(session, ["NVIDIA", "AMD"])
+        assert candidates, "expected guessed board candidates"
+        assert all(c["speculative"] for c in candidates)
+        assert all("id" not in c for c in candidates), "guesses are not registry rows"

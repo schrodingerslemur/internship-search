@@ -217,8 +217,10 @@ def seed_boards_for_companies(
     """Best-effort board candidates for companies the user named.
 
     Company names are turned into plausible board tokens for each provider.
-    Wrong guesses simply return no jobs and are backed off automatically, so
-    this is safe to run without a lookup table.
+    Wrong guesses simply return no jobs, so this is safe to run without a
+    lookup table -- but they are marked ``speculative`` so that a guess which
+    does not exist is never reported as a source failure. Most large employers
+    do not use Greenhouse at all, so most of these are expected to 404.
     """
     candidates: list[dict] = []
     for name in company_names:
@@ -236,7 +238,12 @@ def seed_boards_for_companies(
                 )
                 if existing is None:
                     candidates.append(
-                        {"provider": provider, "board_token": candidate, "company_name": name}
+                        {
+                            "provider": provider,
+                            "board_token": candidate,
+                            "company_name": name,
+                            "speculative": True,
+                        }
                     )
     return candidates
 

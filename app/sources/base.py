@@ -186,26 +186,60 @@ class BoardJobSource(JobSource):
         return [b for b in ctx.boards if b.get("provider") == self.provider][: ctx.max_boards]
 
     async def fetch(self, ctx: SourceContext) -> list[RawJob]:
+        """Crawl every selected board, reporting health on the *registered* ones.
+
+        Boards marked ``speculative`` are guesses at a token for a company the
+        user named -- most large employers do not use any given ATS, so those
+        404s are the expected case, not a fault. Counting them would report a
+        perfectly healthy source as failed whenever the registry is still
+        small, which is exactly what the coverage dashboard exists to avoid.
+        """
         boards = self.select_boards(ctx)
         if not boards:
             return []
         results = await ctx.http.gather([self.fetch_board(b, ctx) for b in boards])
+
         jobs: list[RawJob] = []
-        succeeded = 0
+        attempted = succeeded = 0
+        failures: list[str] = []
+        speculative_failures = 0
+
         for board, item in zip(boards, results, strict=False):
+            is_speculative = bool(board.get("speculative"))
+            if not is_speculative:
+                attempted += 1
+
             if isinstance(item, Exception):
-                log.debug(
-                    "board.failed",
-                    source=self.name,
-                    board=board.get("board_token"),
-                    error=str(item)[:150],
-                )
+                if is_speculative:
+                    speculative_failures += 1
+                else:
+                    failures.append(f"{board.get('board_token')}: {str(item)[:120]}")
                 continue
-            succeeded += 1
+
+            if not is_speculative:
+                succeeded += 1
             jobs.extend(item)
-        self._last_board_stats = (len(boards), succeeded)
-        if succeeded == 0 and boards:
-            raise FetchError(f"all {len(boards)} boards failed")
+
+        # Logged at warning, not debug: without a reason here, a failed crawl
+        # can only be diagnosed by reproducing it by hand.
+        if failures:
+            log.warning(
+                "board.failures",
+                source=self.name,
+                failed=len(failures),
+                attempted=attempted,
+                examples=failures[:3],
+            )
+        if speculative_failures:
+            log.info(
+                "board.speculative_misses",
+                source=self.name,
+                missed=speculative_failures,
+            )
+
+        self._last_board_stats = (attempted, succeeded)
+        if attempted and succeeded == 0:
+            raise FetchError(f"all {attempted} registered boards failed: {failures[0]}")
         return jobs
 
     async def run(self, ctx: SourceContext) -> SourceOutcome:
