@@ -2,12 +2,14 @@
 {% block title %}Application tracker · Internship Search{% endblock %}
 {% block content %}
 <h1>Application tracker</h1>
+{# The board's own column headings already count each stage, so a stats strip
+   above them repeated three of the same four numbers. What the heading owes
+   the reader instead is what this page is for and how to move a card. #}
 <div class="sub">
-  What happened after you applied. Jobs you haven't decided about yet live in
-  <a href="/">Review</a>; jobs you kept for later are in <a href="/saved">Saved</a>.
+  Where each application stands. Move a job along as you hear back &mdash; the
+  buttons on each card take it to the next stage, and nothing here goes back
+  into <a href="/">Review</a>.
 </div>
-
-<div id="tracker-stats">{% include "partials/tracker_stats.html" %}</div>
 
 {% if counts.applied %}
 {% include "partials/kanban.html" %}

@@ -452,9 +452,13 @@ class TestTheTrackerRespondsInPlace:
         assert f'id="card-{applied_job.id}"' in board
 
     def test_the_headline_counts_are_swapped_too(self, signed_in, applied_job):
-        """A count that disagrees with the board under it is worse than no count."""
+        """A count that disagrees with the board under it is worse than no count.
+
+        The board's own column headings carry the per-stage numbers, so the only
+        counts left to refresh are the nav badges.
+        """
         response = self._move(signed_in, applied_job, JobStatus.INTERVIEW.value)
-        assert 'id="tracker-stats"' in response.text
+        assert 'id="nav-applied-count"' in response.text
         assert 'hx-swap-oob' in response.text
 
     def test_each_stage_is_named_in_the_confirmation(self, signed_in, applied_job):
@@ -505,13 +509,19 @@ class TestCountersKeepUp:
         second = make_job(session, n=2, title="Software Intern")
         response = self._hx(signed_in, second, JobStatus.DISMISSED.value)
         assert 'id="feed-headline"' in response.text
-        assert "1 job to review" in response.text
+        assert "1 job waiting on a decision" in response.text
 
-    def test_the_four_counters_are_refreshed(self, signed_in, session):
+    def test_every_nav_count_is_refreshed(self, signed_in, session):
+        """A decision moves a job from one tab to another, so both ends move.
+
+        Refreshing only the badge for the page being looked at would leave the
+        destination tab quietly describing the state before the click.
+        """
         job = make_job(session)
-        response = self._hx(signed_in, job, JobStatus.DISMISSED.value)
-        assert 'id="feed-elsewhere"' in response.text
-        assert "Dismissed" in response.text
+        response = self._hx(signed_in, job, JobStatus.SAVED.value)
+        assert 'id="nav-review-count"' in response.text
+        assert 'id="nav-saved-count"' in response.text
+        assert 'id="nav-applied-count"' in response.text
 
     def test_the_nav_badge_is_refreshed(self, signed_in, session):
         job = make_job(session)
@@ -534,7 +544,7 @@ class TestCountersKeepUp:
         job = make_job(session)
         response = self._hx(signed_in, job, JobStatus.SAVED.value)
         # Still one to review (saved jobs stay), and now one saved.
-        assert "1 job to review" in response.text
+        assert "1 job waiting on a decision" in response.text
         assert f'id="job-{job.id}"' in response.text
 
     def test_the_list_count_is_refreshed(self, signed_in, session):
@@ -560,3 +570,72 @@ class TestCountersKeepUp:
         )
         # Only the one job matches "software", saved or not.
         assert "1 job" in response.text
+
+
+class TestSettingsOwnsSponsorshipAndLocations:
+    """One question, one control, one answer.
+
+    Sponsorship and preferred locations used to be editable on both Settings
+    and the profile page, backed by different stores. The two could disagree,
+    and nothing on either page said which one the search actually used. Settings
+    owns them now; these tests pin down the two ways that could go wrong.
+    """
+
+    def _stored_profile(self, session, account):
+        from app.services.preferences import load_profile
+
+        return load_profile(session, user=account)
+
+    def _given_profile(self, session, account, **fields):
+        from app.schemas.profile import CandidateProfileData
+        from app.services.preferences import save_profile
+
+        data = self._stored_profile(session, account).model_dump()
+        data.update(fields)
+        save_profile(session, CandidateProfileData.model_validate(data), user=account)
+        session.flush()
+
+    def test_saving_the_profile_leaves_what_settings_owns_alone(
+        self, signed_in, session, account
+    ):
+        """The profile form no longer carries these, so it must not rewrite them.
+
+        An unchecked box and an absent box are identical in a POST body. Before
+        this, saving an unrelated field on the profile page silently cleared a
+        sponsorship answer given on Settings.
+        """
+        self._given_profile(
+            session, account, requires_sponsorship=True, preferred_locations=["Boston"]
+        )
+
+        signed_in.post("/profile", data={"school": "CMU"})
+
+        after = self._stored_profile(session, account)
+        assert after.school == "CMU", "the edit that was submitted should still apply"
+        assert after.requires_sponsorship is True
+        assert after.preferred_locations == ["Boston"]
+
+    def test_settings_keeps_the_profile_copy_in_step(self, signed_in, session, account):
+        """The ranking engine ORs the two copies together.
+
+        So a stale `true` left in the profile would keep the search treating
+        sponsorship as required after the box on Settings was cleared -- with no
+        control anywhere on screen able to undo it.
+        """
+        self._given_profile(session, account, requires_sponsorship=True)
+
+        signed_in.post("/settings", data={"notification_provider": "file"})
+
+        assert self._stored_profile(session, account).requires_sponsorship is False
+
+    def test_ticking_the_box_on_settings_reaches_the_profile_copy(
+        self, signed_in, session, account
+    ):
+        self._given_profile(session, account, requires_sponsorship=False)
+
+        signed_in.post(
+            "/settings",
+            data={"notification_provider": "file", "requires_sponsorship": "on"},
+        )
+
+        assert self._stored_profile(session, account).requires_sponsorship is True

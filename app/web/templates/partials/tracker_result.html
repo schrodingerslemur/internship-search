@@ -1,8 +1,15 @@
 {# The response to moving a job on the board: the board as it now stands, plus
    a confirmation carrying the way back. #}
 {% include "partials/kanban.html" %}
-<div id="tracker-stats" hx-swap-oob="true">{% include "partials/tracker_stats.html" %}</div>
-<span id="nav-review-count" hx-swap-oob="true">{% include "partials/nav_count.html" %}</span>
+<span id="nav-review-count" hx-swap-oob="true">
+  {%- with n = counts.to_review, n_label = 'to review' %}{% include "partials/nav_count.html" %}{% endwith -%}
+</span>
+<span id="nav-saved-count" hx-swap-oob="true">
+  {%- with n = counts.saved, n_label = 'saved' %}{% include "partials/nav_count.html" %}{% endwith -%}
+</span>
+<span id="nav-applied-count" hx-swap-oob="true">
+  {%- with n = counts.applied, n_label = 'applied' %}{% include "partials/nav_count.html" %}{% endwith -%}
+</span>
 <div id="toast-host" hx-swap-oob="afterbegin">
   {% include "partials/toast.html" %}
 </div>

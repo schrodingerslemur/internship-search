@@ -169,6 +169,7 @@ def job_detail(
             "statuses": list(JobStatus),
             "view": user_jobs.view_for(db, user, [job]),
             "active_view": "review",
+            "counts": q.dashboard_counts(db, user),
             "flash": _flash(request),
         },
     )
@@ -409,7 +410,11 @@ def tracker(request: Request, db: Session = Depends(get_db), user: User = Depend
 
 
 @router.get("/coverage", response_class=HTMLResponse)
-def coverage(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def coverage(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+) -> HTMLResponse:
     from sqlalchemy import select
 
     from app.models import JobSourceRecord
@@ -430,12 +435,17 @@ def coverage(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
             "records": records,
             "discovery": discovery_summary(db),
             "yields": q.source_yield_stats(db),
+            "counts": q.dashboard_counts(db, user),
         },
     )
 
 
 @router.get("/analytics", response_class=HTMLResponse)
-def analytics(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def analytics(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+) -> HTMLResponse:
     from app.services.learning import outcome_insights
 
     return templates.TemplateResponse(
@@ -445,6 +455,7 @@ def analytics(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
             "summary": q.analytics_summary(db),
             "insights": outcome_insights(db),
             "notifications": q.recent_notifications(db, limit=10),
+            "counts": q.dashboard_counts(db, user),
         },
     )
 
@@ -472,6 +483,7 @@ def settings_page(
             "channel_ready": channel.ready_for(prefs.notifications.provider),
             "channel_missing": channel.missing_for(prefs.notifications.provider),
             "digest_email": user.notification_email,
+            "counts": q.dashboard_counts(db, user),
             "saved": request.query_params.get("saved") == "1",
             # `error` means the settings did not save. A delivery test that
             # fails is a `notice`: the settings saved fine, the send did not.
@@ -654,6 +666,19 @@ async def settings_save(
     if form.get("digest_email") is not None:
         user.digest_email = str(form.get("digest_email")).strip() or None
 
+    # The candidate profile carries its own copy of this answer, and the ranking
+    # engine ORs the two together (`pipeline/match.py`). Settings owns the only
+    # control now, so the profile copy is kept in step: without this, unticking
+    # the box here would leave a stale `true` behind that no page can reach and
+    # the search would go on treating sponsorship as required.
+    profile = load_profile(db, user=user)
+    if bool(profile.requires_sponsorship) != validated.constraints.requires_sponsorship:
+        from app.schemas.profile import CandidateProfileData
+
+        profile_data = profile.model_dump()
+        profile_data["requires_sponsorship"] = validated.constraints.requires_sponsorship
+        save_profile(db, CandidateProfileData.model_validate(profile_data), user=user)
+
     save_preferences(db, validated, user=user)
     db.commit()
 
@@ -680,6 +705,7 @@ def profile_page(
             "profile": load_profile(db, user=user),
             "resumes": list_resumes(db, user),
             "saved": request.query_params.get("saved") == "1",
+            "counts": q.dashboard_counts(db, user),
         },
     )
 
@@ -707,7 +733,7 @@ async def profile_save(
     for name, parser in (
         ("technical_skills", csv), ("programming_languages", csv),
         ("hardware_skills", csv), ("software_skills", csv), ("tools", csv),
-        ("coursework", csv), ("preferred_industries", csv), ("preferred_locations", csv),
+        ("coursework", csv), ("preferred_industries", csv),
         ("previous_internships", lines), ("projects", lines), ("publications", lines),
     ):
         data[name] = parser(name)
@@ -719,9 +745,11 @@ async def profile_save(
         except ValueError:
             data[name] = None
 
-    data["requires_sponsorship"] = str(form.get("requires_sponsorship", "")).lower() in (
-        "1", "true", "on", "yes"
-    )
+    # `requires_sponsorship` and `preferred_locations` are deliberately absent:
+    # Settings owns both, and this form no longer offers them. Rewriting them
+    # from a form that does not carry them would clear a real answer -- an
+    # unchecked box and an absent box look identical in a POST body -- every
+    # time somebody saved an unrelated field on this page.
     data["willing_to_relocate"] = str(form.get("willing_to_relocate", "")).lower() in (
         "1", "true", "on", "yes"
     )

@@ -1,3 +1,6 @@
-{%- if counts and counts.to_review -%}
-<span class="count" aria-label="{{ counts.to_review }} jobs to review">{{ counts.to_review }}</span>
+{#- One nav badge. The caller sets `n` (the number) and `n_label` (what it
+    counts, for screen readers). Zero renders nothing: a row of noughts is
+    noise, and an absent badge already reads as "none". -#}
+{%- if n -%}
+<span class="count" aria-label="{{ n }} {{ n_label }}">{{ n }}</span>
 {%- endif -%}

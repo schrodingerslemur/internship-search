@@ -1,22 +1,40 @@
 {# The one-line answer to "what should I do next?", for whichever list you are
    on. Swapped on its own after every action, so the number at the top of the
-   page can never disagree with the cards underneath it. #}
+   page can never disagree with the cards underneath it.
+
+   On Review the headline is the number worth *acting on*, not the size of the
+   backlog. A five-figure "jobs to review" count is not a task: it never
+   reaches zero, it does not change when you work, and leading with it buries
+   the one figure that does. The backlog still appears, as context, on the line
+   below -- and every number that names a subset links to that subset, so the
+   headline is somewhere to start rather than something to read. #}
 {% set vw = active_view|default('review') %}
 {% if vw == 'review' %}
-  {% if counts.to_review %}
-    <div class="headline">{{ counts.to_review }} job{{ '' if counts.to_review == 1 else 's' }} to review</div>
+  {% if counts.apply_now %}
+    <div class="headline">
+      <a href="/?priority=apply_now">{{ counts.apply_now }} worth applying to now</a>
+    </div>
     <div class="because">
+      Your closest matches, ranked first.
       {% if counts.new_since_yesterday %}
-        {{ counts.new_since_yesterday }} found since yesterday{% if counts.saved %} &middot;
-        {{ counts.saved }} you saved for later{% endif %}.
-      {% elif counts.saved %}
-        Nothing new since yesterday &mdash; {{ counts.saved }} saved job{{ '' if counts.saved == 1 else 's' }} still waiting on you.
+        {{ counts.new_since_yesterday }} of the {{ counts.to_review }} still to
+        review arrived since yesterday.
       {% else %}
-        Nothing new since yesterday.
+        {{ counts.to_review }} still waiting on a decision.
       {% endif %}
-      {% if counts.apply_now %}
-        <strong>{{ counts.apply_now }} worth applying to now.</strong>
-      {% endif %}
+    </div>
+  {% elif counts.new_since_yesterday %}
+    <div class="headline">{{ counts.new_since_yesterday }} new since yesterday</div>
+    <div class="because">
+      Nothing scored high enough to flag as urgent.
+      {{ counts.to_review }} in total are waiting on a decision.
+    </div>
+  {% elif counts.to_review %}
+    <div class="headline">{{ counts.to_review }} job{{ '' if counts.to_review == 1 else 's' }} waiting on a decision</div>
+    <div class="because">
+      Nothing new since yesterday, and nothing urgent right now. Save what looks
+      promising and dismiss the rest &mdash; both are one click, and both can be
+      undone.
     </div>
   {% else %}
     <div class="headline">You're all caught up</div>
@@ -37,6 +55,7 @@
       <strong>{{ counts.interviews }} interview{{ '' if counts.interviews == 1 else 's' }},
       {{ counts.offers }} offer{{ '' if counts.offers == 1 else 's' }}.</strong>
     {% endif %}
+    Follow each one along in the <a href="/tracker">tracker</a>.
   </div>
 {% else %}
   <div class="headline">{{ counts.dismissed }} dismissed job{{ '' if counts.dismissed == 1 else 's' }}</div>

@@ -21,6 +21,12 @@ def _account_context(request) -> dict:
     return {"current_user": getattr(request.state, "user", None)}
 
 
+#: The nav badges read `counts`, which every page behind the nav passes from its
+#: own request-scoped session. It is deliberately *not* a context processor:
+#: processors receive only the request, so one would have to open a second
+#: session of its own -- bypassing the session this request is already using,
+#: and any override placed on top of it. A page that omits `counts` renders the
+#: tabs without badges rather than failing.
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR), context_processors=[_account_context])
 
 
@@ -42,8 +48,10 @@ def timeago(value: datetime | None) -> str:
     if days < 30:
         return f"{days} days ago"
     if days < 365:
-        return f"{days // 30} months ago"
-    return f"{days // 365} years ago"
+        months = days // 30
+        return f"{months} month{'' if months == 1 else 's'} ago"
+    years = days // 365
+    return f"{years} year{'' if years == 1 else 's'} ago"
 
 
 def deadline_badge(job) -> dict[str, str]:

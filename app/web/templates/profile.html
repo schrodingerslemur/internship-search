@@ -58,15 +58,19 @@
       <input name="work_authorization" value="{{ profile.work_authorization or '' }}" style="width:100%"></div>
     <div class="field"><label>Security clearance</label>
       <input name="security_clearance" value="{{ profile.security_clearance or '' }}" style="width:100%"></div>
-    <div class="field"><label>I require sponsorship</label>
-      <input type="checkbox" name="requires_sponsorship" {% if profile.requires_sponsorship %}checked{% endif %}></div>
     <div class="field"><label>Willing to relocate</label>
       <input type="checkbox" name="willing_to_relocate" {% if profile.willing_to_relocate %}checked{% endif %}></div>
   </div>
   <div class="field"><label>Preferred industries (comma separated)</label>
     <input name="preferred_industries" value="{{ profile.preferred_industries|join(', ') }}" style="width:100%"></div>
-  <div class="field"><label>Preferred locations (comma separated)</label>
-    <input name="preferred_locations" value="{{ profile.preferred_locations|join(', ') }}" style="width:100%"></div>
+  {# Sponsorship and locations used to be editable here as well as in Settings,
+     backed by different stores -- so the two copies could disagree and the
+     page gave no hint which one the search actually used. Settings owns both
+     now, and this points at them rather than repeating them. #}
+  <div class="help">
+    Visa sponsorship and preferred locations are part of what we search for, so
+    they live in <a href="/settings">Settings</a>.
+  </div>
 </div>
 
 <div style="margin:20px 0"><button class="btn primary" type="submit">Save profile</button></div>

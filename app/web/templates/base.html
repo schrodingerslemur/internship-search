@@ -377,15 +377,6 @@ nav a.tab.active .count{background:var(--accent)}
  flex-wrap:wrap;gap:6px 16px}
 .overview .caught-up{font-size:15px;font-weight:600}
 
-/* Where everything else went. Counters that link to the list they count. */
-.elsewhere{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
-.elsewhere a{display:flex;align-items:baseline;gap:7px;background:var(--panel);
- border:1px solid var(--line);border-radius:9px;padding:8px 13px;color:var(--text);
- font-size:13px}
-.elsewhere a:hover{border-color:var(--accent);text-decoration:none}
-.elsewhere a.current{border-color:var(--accent)}
-.elsewhere a b{font-size:15px}
-.elsewhere a span{color:var(--muted);font-size:12.5px}
 
 /* Active filters, shown as removable chips: a job never disappears without
    the reason being visible on screen. */
@@ -429,8 +420,6 @@ textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible{
   .pager{flex-wrap:wrap}
   .overview{padding:14px 15px}
   .overview .headline{font-size:20px}
-  .elsewhere{gap:7px}
-  .elsewhere a{flex:1 1 calc(50% - 4px);justify-content:center;padding:10px 8px}
 }
 
 /* Respect a stated preference for less movement. */
@@ -451,16 +440,28 @@ ul.clean li{padding:3px 0;font-size:13px}
 <header class="top">
   <nav aria-label="Main">
     <span class="brand">🚀<span class="brand-text"> Internship Search</span></span>
-    {# The lifecycle, left to right, in the order a job passes through it. #}
+    {# The lifecycle, left to right, in the order a job passes through it:
+       decide, keep, apply, then follow up. These four are the whole of the
+       navigation -- the counts live on the tabs themselves rather than in a
+       second row further down the page, so there is exactly one place that
+       says how many jobs are where.
+
+       Every page behind the nav passes `counts`. A page that does not renders
+       the tabs unbadged rather than erroring. #}
+    {% set nc = counts|default({}, true) %}
     <a class="tab {% if request.url.path=='/' %}active{% endif %}" href="/"
        {% if request.url.path=='/' %}aria-current="page"{% endif %}>Review<span
-       id="nav-review-count">{% include "partials/nav_count.html" %}</span></a>
+       id="nav-review-count">{% with n = nc.to_review, n_label = 'to review' %}{% include "partials/nav_count.html" %}{% endwith %}</span></a>
     <a class="tab {% if request.url.path=='/saved' %}active{% endif %}" href="/saved"
-       {% if request.url.path=='/saved' %}aria-current="page"{% endif %}>Saved</a>
+       {% if request.url.path=='/saved' %}aria-current="page"{% endif %}>Saved<span
+       id="nav-saved-count">{% with n = nc.saved, n_label = 'saved' %}{% include "partials/nav_count.html" %}{% endwith %}</span></a>
     <a class="tab {% if request.url.path=='/applied' %}active{% endif %}" href="/applied"
-       {% if request.url.path=='/applied' %}aria-current="page"{% endif %}>Applied</a>
-    <a class="tab {% if request.url.path=='/dismissed' %}active{% endif %}" href="/dismissed"
-       {% if request.url.path=='/dismissed' %}aria-current="page"{% endif %}>Dismissed</a>
+       {% if request.url.path=='/applied' %}aria-current="page"{% endif %}>Applied<span
+       id="nav-applied-count">{% with n = nc.applied, n_label = 'applied' %}{% include "partials/nav_count.html" %}{% endwith %}</span></a>
+    {# The tracker is where an application actually goes after it is sent, so it
+       belongs beside the lists rather than buried in the account menu. #}
+    <a class="tab {% if request.url.path=='/tracker' %}active{% endif %}" href="/tracker"
+       {% if request.url.path=='/tracker' %}aria-current="page"{% endif %}>Tracker</a>
     <span class="spacer"></span>
     {# On a phone four tabs plus this button plus the avatar do not fit, and the
        avatar is the one that must never be squeezed out -- it holds sign-out.
@@ -476,7 +477,9 @@ ul.clean li{padding:3px 0;font-size:13px}
         <form method="post" action="/run-search" class="run-search-menu">
           <button type="submit">Search now</button>
         </form>
-        <a href="/tracker">Application tracker</a>
+        {# Dismissed is an archive, not a stage you work through, so it sits
+           here rather than taking a quarter of the main navigation. #}
+        <a href="/dismissed">Dismissed jobs</a>
         <a href="/coverage">Search insights</a>
         <a href="/profile">Your profile</a>
         <a href="/settings">Settings</a>

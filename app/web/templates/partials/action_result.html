@@ -5,14 +5,21 @@
    always shows exactly what it claims to.
 
    Everything else the action changed is refreshed out-of-band alongside it --
-   the headline, the four counters, and the nav badge. A number left describing
-   the previous state is worse than no number at all. #}
+   the headline and every nav badge. A number left describing the previous
+   state is worse than no number at all, and a decision moves a job from one
+   tab to another, so all three counts are resent rather than just the one for
+   the page being looked at. #}
 {% if keep_card %}{% include "partials/job_card.html" %}{% endif %}
 <div id="feed-headline" hx-swap-oob="true">{% include "partials/feed_headline.html" %}</div>
-<nav class="elsewhere" id="feed-elsewhere" hx-swap-oob="true" aria-label="Job lists">
-  {%- include "partials/feed_elsewhere.html" -%}
-</nav>
-<span id="nav-review-count" hx-swap-oob="true">{% include "partials/nav_count.html" %}</span>
+<span id="nav-review-count" hx-swap-oob="true">
+  {%- with n = counts.to_review, n_label = 'to review' %}{% include "partials/nav_count.html" %}{% endwith -%}
+</span>
+<span id="nav-saved-count" hx-swap-oob="true">
+  {%- with n = counts.saved, n_label = 'saved' %}{% include "partials/nav_count.html" %}{% endwith -%}
+</span>
+<span id="nav-applied-count" hx-swap-oob="true">
+  {%- with n = counts.applied, n_label = 'applied' %}{% include "partials/nav_count.html" %}{% endwith -%}
+</span>
 {% if total is not none %}
 <span class="sub" style="margin:0" role="status" id="list-count" hx-swap-oob="true">
   {%- include "partials/list_count.html" -%}
