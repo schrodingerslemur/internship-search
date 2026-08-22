@@ -494,6 +494,12 @@ def hard_exclusions(
         if rule.excluded and rule.matches(location_text):
             return True, f"Excluded location: {rule.pattern}"
 
+    # Somewhere you cannot take a job is not a low-scoring job, it is not a
+    # job. Only ever applied to a country the posting actually stated -- an
+    # unparsed location is not evidence of being abroad.
+    if not prefs.locations.country_allowed(job.country):
+        return True, f"Outside the countries you can work in: {job.country}"
+
     blob = normalize_text(f"{job.title} {job.description or ''}"[:4000])
     for term in prefs.keywords.hard_exclude:
         if term.strip() and normalize_text(term) in blob:

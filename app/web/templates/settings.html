@@ -2,241 +2,153 @@
 {% block title %}Settings · Internship Search{% endblock %}
 {% block content %}
 {#
-  Two tiers, deliberately. Everything above "Advanced" is a question a job
-  seeker can answer about themselves. Everything below it is a question about
-  how the search engine behaves, and has a working default -- so it is folded
-  away rather than put in front of someone on their first visit.
+  One question per row, and only questions a job seeker can answer about
+  themselves. Notifications and scheduling now live on their own page: twenty
+  fields about SMTP hosts and cron times have nothing to do with what you are
+  looking for, and together they made this page unreadable.
+
+  `_section` tells the POST handler which parts of the preference document this
+  form is responsible for. Without it, submitting this page would read every
+  absent notification checkbox as "off".
 
   Field names are the contract with the POST handler and must not change.
   Fields inside a closed <details> are still submitted, so folding them away
   never loses a setting.
 #}
-<h1>Settings</h1>
-<div class="sub">What we look for, and when we tell you about it.</div>
+<h1>What you're looking for</h1>
+<div class="sub">
+  The search runs on this. Everything has a working default &mdash; change what
+  matters to you and leave the rest alone.
+</div>
 
-{% if saved %}<div class="flash ok">Preferences updated.{% if rescored %}
-  Re-ranked {{ rescored }} job{{ '' if rescored == '1' else 's' }} against your new settings &mdash;
-  <a href="/">see the feed</a>.{% endif %}</div>{% endif %}
+{% if saved %}<div class="flash ok">Saved.{% if rescored %}
+  Re-ranked {{ rescored }} job{{ '' if rescored == '1' else 's' }} against your new
+  settings &mdash; <a href="/">see the feed</a>.{% endif %}</div>{% endif %}
 {% if error %}<div class="flash bad">Could not save: {{ error }}</div>{% endif %}
 {% if notice %}<div class="flash {{ 'bad' if notice_bad else 'ok' }}">{{ notice }}</div>{% endif %}
 
 <form method="post" action="/settings">
+<input type="hidden" name="_section" value="search">
+<input type="hidden" name="_section" value="location">
+<input type="hidden" name="_section" value="constraints">
+<input type="hidden" name="_section" value="ranking">
+<input type="hidden" name="_section" value="scope">
 
-<h2>What you're looking for</h2>
-<div class="panel">
-  <div class="field">
-    <label for="roles">Roles, one per line</label>
-    <textarea id="roles" name="roles" rows="7">{% for r in prefs.roles %}{{ r.name }}{% if r.weight != 1.0 %} | {{ r.weight }}{% endif %}
+<div class="panel setting-group">
+
+  <div class="setting">
+    <label for="roles">Roles</label>
+    <div class="ctl">
+      <textarea id="roles" name="roles" rows="6">{% for r in prefs.roles %}{{ r.name }}{% if r.weight != 1.0 %} | {{ r.weight }}{% endif %}
 {% endfor %}</textarea>
-    <div class="help">
-      We search related phrasings automatically, so &ldquo;FPGA Engineer Intern&rdquo;
-      also finds &ldquo;FPGA Design Intern&rdquo;. To make one role count for more than
-      the others, add a weight after a pipe: <span class="mono">FPGA Engineer Intern | 1.5</span>
+      <div class="help">
+        One per line. Related phrasings are searched automatically, so
+        &ldquo;FPGA Engineer Intern&rdquo; also finds &ldquo;FPGA Design Intern&rdquo;.
+        Add <span class="mono">| 1.5</span> after a role to make it count for more.
+      </div>
     </div>
   </div>
-  <div class="field">
-    <label for="seasons">Which terms you can start, one per line</label>
-    <textarea id="seasons" name="seasons" rows="3">{{ prefs.constraints.seasons|join('\n') }}</textarea>
-    <div class="help">For example: Summer 2026</div>
-  </div>
-  <div class="row">
-    <div class="field">
-      <label class="inline-check">
-        <input type="checkbox" name="internship_only" {% if prefs.constraints.internship_only %}checked{% endif %}>
-        <span>Internships and co-ops only</span>
-      </label>
+
+  <div class="setting">
+    <label for="allowed_countries">Countries</label>
+    <div class="ctl">
+      {% set allowed = prefs.locations.allowed_countries %}
+      <select id="allowed_countries" name="allowed_countries" multiple size="6">
+        {% for code, name in [('US','United States'),('CA','Canada'),('GB','United Kingdom'),
+                              ('IE','Ireland'),('DE','Germany'),('NL','Netherlands'),
+                              ('CH','Switzerland'),('SG','Singapore'),('IN','India'),
+                              ('AU','Australia'),('JP','Japan'),('IL','Israel')] %}
+          <option value="{{ code }}" {% if code in allowed %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+      <div class="help">
+        Where you can actually take a job.
+        {% if allowed %}
+          Currently <strong>{{ allowed|join(', ') }}</strong> &mdash; anywhere else
+          is hidden. Ctrl-click to add or remove; deselect everything to allow anywhere.
+        {% else %}
+          Nothing selected, so <strong>anywhere is allowed</strong>. Pick one or
+          more to restrict.
+        {% endif %}
+        An excluded country is hidden outright, not just ranked down &mdash; but only
+        when the posting says where it is. Listings that don't say are never hidden.
+      </div>
     </div>
-    <div class="field"><label for="graduation_year">Graduation year</label>
-      <input id="graduation_year" name="graduation_year" type="number"
-             value="{{ prefs.constraints.graduation_year or '' }}"></div>
-    <div class="field">
-      <label class="inline-check">
+  </div>
+
+  <div class="setting">
+    <label for="locations">Preferred places</label>
+    <div class="ctl">
+      <textarea id="locations" name="locations" rows="5">{% for r in prefs.locations.rules %}{{ r.pattern }} | {{ r.bonus }}{% if r.aliases %} | {{ r.aliases|join(', ') }}{% endif %}
+{% endfor %}</textarea>
+      <div class="help">
+        <span class="mono">Place | how much it counts | other names for it</span>.
+        These rank jobs up; they never hide anything. Use Countries above for that.
+      </div>
+    </div>
+  </div>
+
+  <div class="setting">
+    <label for="remote_bonus">Remote</label>
+    <div class="ctl">
+      <div class="inline">
+        <input id="remote_bonus" name="remote_bonus" type="number" step="0.5" style="width:5.5em"
+               value="{{ prefs.locations.remote_bonus }}">
+        <span class="help" style="margin:0">for a remote job, against</span>
+        <input id="other_us_bonus" name="other_us_bonus" type="number" step="0.5" style="width:5.5em"
+               value="{{ prefs.locations.other_us_bonus }}">
+        <span class="help" style="margin:0">for an unremarkable location</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="setting">
+    <label for="seasons">Terms</label>
+    <div class="ctl">
+      <textarea id="seasons" name="seasons" rows="2"
+                placeholder="Summer 2027">{{ prefs.constraints.seasons|join('\n') }}</textarea>
+      <div class="help">Which terms you can start, one per line. Empty accepts any.</div>
+    </div>
+  </div>
+
+  <div class="setting">
+    <label for="graduation_year">You</label>
+    <div class="ctl">
+      <div class="inline">
+        <span class="help" style="margin:0">Graduating</span>
+        <input id="graduation_year" name="graduation_year" type="number" style="width:6.5em"
+               value="{{ prefs.constraints.graduation_year or '' }}">
+        <label class="inline-check">
+          <input type="checkbox" name="internship_only" {% if prefs.constraints.internship_only %}checked{% endif %}>
+          <span>Internships and co-ops only</span>
+        </label>
+      </div>
+      <label class="inline-check" style="margin-top:9px">
         <input type="checkbox" name="requires_sponsorship" {% if prefs.constraints.requires_sponsorship %}checked{% endif %}>
         <span>I need visa sponsorship</span>
       </label>
+      <label class="inline-check" style="margin-top:6px">
+        <input type="checkbox" name="hard_filter_sponsorship" {% if prefs.constraints.hard_filter_sponsorship %}checked{% endif %}>
+        <span>Hide jobs that say they won't sponsor</span>
+      </label>
       <div class="help">
-        <label class="inline-check" style="margin-top:8px">
-          <input type="checkbox" name="hard_filter_sponsorship" {% if prefs.constraints.hard_filter_sponsorship %}checked{% endif %}>
-          <span>Hide jobs that say they won't sponsor</span>
-        </label>
         Jobs that say nothing about sponsorship are never hidden &mdash; we don't guess.
       </div>
     </div>
   </div>
+
 </div>
 
-<h2>Where you want to work</h2>
-<div class="panel">
-  <div class="field">
-    <label for="locations">Preferred locations, one per line</label>
-    <textarea id="locations" name="locations" rows="6">{% for r in prefs.locations.rules %}{{ r.pattern }} | {{ r.bonus }}{% if r.aliases %} | {{ r.aliases|join(', ') }}{% endif %}
-{% endfor %}</textarea>
-    <div class="help">
-      Format: <span class="mono">Place | how much it counts | other names for it</span>.
-      Somewhere you'd rather avoid gets a negative number; nowhere is ruled out
-      entirely unless you give it <span class="mono">-999</span>.
-    </div>
-  </div>
-  <div class="row">
-    <div class="field"><label for="remote_bonus">How much a remote job counts for</label>
-      <input id="remote_bonus" name="remote_bonus" type="number" step="0.5"
-             value="{{ prefs.locations.remote_bonus }}"></div>
-    <div class="field"><label for="other_us_bonus">How much anywhere else in the US counts for</label>
-      <input id="other_us_bonus" name="other_us_bonus" type="number" step="0.5"
-             value="{{ prefs.locations.other_us_bonus }}"></div>
-  </div>
-</div>
-
-<h2>Emails</h2>
-<div class="panel">
-  <div class="row">
-    <div class="field">
-      <label class="inline-check">
-        <input type="checkbox" name="notifications_enabled" {% if prefs.notifications.enabled %}checked{% endif %}>
-        <span>Email me new matches</span>
-      </label>
-    </div>
-    <div class="field"><label for="notification_provider">Send them via</label>
-      <select id="notification_provider" name="notification_provider">
-        {% for p in providers %}
-          <option value="{{ p.name }}" {% if prefs.notifications.provider == p.name %}selected{% endif %}>
-            {{ p.display_name }}{% if not p.configured %} (needs setting up){% endif %}
-          </option>
-        {% endfor %}
-      </select></div>
-    <div class="field"><label for="notification_max_jobs">Most jobs in one email</label>
-      <input id="notification_max_jobs" name="notification_max_jobs" type="number"
-             value="{{ prefs.notifications.max_jobs_per_notification }}"></div>
-    <div class="field"><label for="notification_min_score">Only include jobs matching at least</label>
-      <input id="notification_min_score" name="notification_min_score" type="number"
-             value="{{ prefs.notifications.min_score }}">
-      <div class="help">Out of 100. Lower this if your emails feel too sparse.</div></div>
-    <div class="field">
-      <label class="inline-check">
-        <input type="checkbox" name="send_when_empty" {% if prefs.notifications.send_when_empty %}checked{% endif %}>
-        <span>Email me even when there's nothing new</span>
-      </label>
-    </div>
-    <div class="field">
-      <label class="inline-check">
-        <input type="checkbox" name="notify_on_updates" {% if prefs.notifications.notify_on_updates %}checked{% endif %}>
-        <span>Tell me when a job I've seen changes</span>
-      </label>
-    </div>
-  </div>
-  <div class="help">
-    You are never emailed the same job twice, and never emailed a job you've
-    applied to or dismissed. A job that materially changes can come back once,
-    at most every {{ prefs.notifications.update_cooldown_hours }} hours.
-  </div>
-
-  {# Choosing a channel and setting it up are one action, not two screens. #}
-  <div class="channel-setup" data-provider="email"
-       {% if prefs.notifications.provider != 'email' %}hidden{% endif %}>
-    <h3 style="margin-top:18px">Email setup</h3>
-    <div class="row">
-      <div class="field"><label for="digest_email">Send my emails to</label>
-        <input id="digest_email" name="digest_email" value="{{ digest_email or '' }}"
-               placeholder="you@example.com"></div>
-      <div class="field"><label for="smtp_host">Mail server</label>
-        <input id="smtp_host" name="smtp_host" value="{{ channel.smtp_host or '' }}" placeholder="smtp.gmail.com"></div>
-      <div class="field"><label for="smtp_port">Port</label>
-        <input id="smtp_port" name="smtp_port" type="number" value="{{ channel.smtp_port or 587 }}"></div>
-      <div class="field"><label for="smtp_user">Mail account</label>
-        <input id="smtp_user" name="smtp_user" value="{{ channel.smtp_user or '' }}" placeholder="you@gmail.com"></div>
-      <div class="field"><label for="smtp_password">Mail password</label>
-        <input id="smtp_password" name="smtp_password" type="password" autocomplete="new-password"
-               placeholder="{{ '•••••••• (unchanged)' if channel.smtp_password else 'Gmail app password' }}">
-        <div class="help">
-          Gmail needs an app password, not your account password. Paste it
-          exactly as Google shows it &mdash; the spaces are removed for you.
-        </div></div>
-      <div class="field"><label for="email_from">Send from</label>
-        <input id="email_from" name="email_from" value="{{ channel.email_from or '' }}"
-               placeholder="defaults to the mail account"></div>
-    </div>
-  </div>
-
-  <div class="channel-setup" data-provider="telegram"
-       {% if prefs.notifications.provider != 'telegram' %}hidden{% endif %}>
-    <h3 style="margin-top:18px">Telegram setup</h3>
-    <div class="row">
-      <div class="field"><label for="telegram_bot_token">Bot token</label>
-        <input id="telegram_bot_token" name="telegram_bot_token" type="password" autocomplete="new-password"
-               placeholder="{{ '•••••••• (unchanged)' if channel.telegram_bot_token else 'from @BotFather' }}"></div>
-      <div class="field"><label for="telegram_chat_id">Chat ID</label>
-        <input id="telegram_chat_id" name="telegram_chat_id" value="{{ channel.telegram_chat_id or '' }}"></div>
-    </div>
-  </div>
-
-  <div class="note {{ '' if channel_ready else 'warn' }}" style="margin-top:16px">
-    {% if channel_ready %}
-      ✓ <strong>{{ prefs.notifications.provider|humanize }}</strong> is set up and ready.
-    {% else %}
-      ⚠ <strong>{{ prefs.notifications.provider|humanize }}</strong> still needs:
-      {{ channel_missing|join(', ') }}. Until it's complete, emails are written to a
-      file instead of being sent.
-    {% endif %}
-    <button class="btn sm" type="submit" formaction="/settings/test-channel" formnovalidate
-            style="margin-left:8px">Save and send a test</button>
-    <div class="help" style="margin-top:8px">
-      A test that times out usually means this computer blocks outgoing mail, not
-      that your settings are wrong &mdash; scheduled emails send from elsewhere
-      and are unaffected.
-    </div>
-  </div>
-</div>
-
-<h2>When we search</h2>
-<div class="panel">
-  <div class="row">
-    <div class="field">
-      <label class="inline-check">
-        <input type="checkbox" name="schedule_enabled" {% if prefs.schedule.enabled %}checked{% endif %}>
-        <span>Search for new jobs automatically</span>
-      </label>
-      <div class="help">With this off, jobs only arrive when you press &ldquo;Search now&rdquo;.</div>
-    </div>
-    <div class="field"><label for="timezone">Your timezone</label>
-      <select id="timezone" name="timezone">
-        {% set zones = ['America/New_York','America/Chicago','America/Denver','America/Los_Angeles',
-                        'America/Anchorage','Pacific/Honolulu','Europe/London','Europe/Berlin',
-                        'Asia/Kolkata','Asia/Singapore','Asia/Tokyo','Australia/Sydney','UTC'] %}
-        {% if prefs.schedule.timezone not in zones %}
-          <option value="{{ prefs.schedule.timezone }}" selected>{{ prefs.schedule.timezone }}</option>
-        {% endif %}
-        {% for z in zones %}
-          <option value="{{ z }}" {% if prefs.schedule.timezone == z %}selected{% endif %}>{{ z.replace('_',' ') }}</option>
-        {% endfor %}
-      </select>
-      <div class="help">All times below are in this zone.</div></div>
-    <div class="field"><label for="morning_time">Morning search and email</label>
-      <label class="inline-check">
-        <input type="checkbox" name="morning_enabled" {% if prefs.schedule.morning_enabled %}checked{% endif %}>
-        <span>On, at</span>
-        <input id="morning_time" name="morning_time" type="time" value="{{ prefs.schedule.morning_time }}"
-               style="width:auto">
-      </label></div>
-    <div class="field"><label for="afternoon_time">Afternoon search and email</label>
-      <label class="inline-check">
-        <input type="checkbox" name="afternoon_enabled" {% if prefs.schedule.afternoon_enabled %}checked{% endif %}>
-        <span>On, at</span>
-        <input id="afternoon_time" name="afternoon_time" type="time" value="{{ prefs.schedule.afternoon_time }}"
-               style="width:auto">
-      </label></div>
-    <div class="field"><label for="cadence">On which days</label>
-      <select id="cadence" name="cadence">
-        <option value="all" {% if prefs.schedule.cadence=='all' %}selected{% endif %}>Every day</option>
-        <option value="weekdays" {% if prefs.schedule.cadence=='weekdays' %}selected{% endif %}>Weekdays only</option>
-      </select></div>
-  </div>
+<div class="save-bar">
+  <button class="btn primary" type="submit">Save</button>
+  <a class="btn" href="/notifications">Emails and schedule &rarr;</a>
 </div>
 
 {# ---------------------------------------------------------------- advanced
-   Everything below here already works without being touched. #}
+   Everything below already works without being touched. #}
 <details class="advanced">
-  <summary><h2 style="display:inline">Advanced</h2>
-    <span class="help">Fine-tune ranking, companies, and which sites we search.</span></summary>
+  <summary><h2 style="display:inline">Fine-tuning</h2>
+    <span class="help">Keywords, companies, how the score is weighted, and which sites we search.</span></summary>
 
   <h3 class="adv-h">Words that matter to you</h3>
   <div class="panel">
@@ -262,8 +174,6 @@
         <textarea id="co_pref" name="companies_preferred" rows="6">{{ prefs.companies.preferred|join('\n') }}</textarea></div>
       <div class="field"><label for="co_black">Never show these</label>
         <textarea id="co_black" name="companies_blacklisted" rows="6">{{ prefs.companies.blacklisted|join('\n') }}</textarea></div>
-      <div class="field"><label for="co_mon">Check their careers page every run</label>
-        <textarea id="co_mon" name="companies_monitored" rows="6">{{ prefs.companies.monitored|join('\n') }}</textarea></div>
       <div class="field"><label for="co_types">Kinds of company you prefer</label>
         <textarea id="co_types" name="company_types" rows="6">{{ prefs.companies.preferred_types|join('\n') }}</textarea>
         <div class="help">For example: startup, research lab, semiconductor</div></div>
@@ -277,12 +187,12 @@
     </div>
     <div class="row">
       {% for name, label, value in [
-          ('role_match', 'How closely the title matches your roles', prefs.weights.role_match),
-          ('technical_skills', 'Overlap with your technical skills', prefs.weights.technical_skills),
-          ('candidate_fit', 'How well you fit the requirements', prefs.weights.candidate_fit),
+          ('role_match', 'Title matches your roles', prefs.weights.role_match),
+          ('technical_skills', 'Overlap with your skills', prefs.weights.technical_skills),
+          ('candidate_fit', 'You fit the requirements', prefs.weights.candidate_fit),
           ('location', 'Location', prefs.weights.location),
           ('company_preference', 'Company preference', prefs.weights.company_preference),
-          ('freshness', 'How recently it was posted', prefs.weights.freshness),
+          ('freshness', 'Posted recently', prefs.weights.freshness),
           ('internship_constraints', 'Internship term and level', prefs.weights.internship_constraints)] %}
         <div class="field"><label for="w_{{ name }}">{{ label }}</label>
           <input id="w_{{ name }}" name="weight_{{ name }}" type="number" step="1" value="{{ value }}"></div>
@@ -342,7 +252,7 @@
           <input type="checkbox" name="llm_semantic_matching" {% if prefs.scope.llm_semantic_matching %}checked{% endif %}>
           <span>Use AI to judge how well a job fits you</span>
         </label>
-        <div class="help">Needs an Anthropic API key in the server's configuration.</div>
+        <div class="help">Needs a model configured on the server. See <a href="/coverage">Search insights</a>.</div>
       </div>
       <div class="field">
         <label class="inline-check">
@@ -366,26 +276,12 @@
       <div class="help">Everything not ticked is searched. See <a href="/coverage">Search insights</a> for how each one is doing.</div>
     </div>
   </div>
+
+  <div class="save-bar">
+    <button class="btn primary" type="submit">Save</button>
+  </div>
 </details>
-
-<div class="save-bar">
-  <button class="btn primary" type="submit">Save settings</button>
-</div>
 </form>
-
-<script>
-// Show only the selected channel's fields; the others stay in the DOM so a
-// half-filled setup is not lost by toggling the select back and forth.
-(function () {
-  const select = document.querySelector('select[name=notification_provider]');
-  if (!select) return;
-  const sync = () => document.querySelectorAll('.channel-setup').forEach(
-    el => { el.hidden = el.dataset.provider !== select.value; }
-  );
-  select.addEventListener('change', sync);
-  sync();
-})();
-</script>
 
 <h2>Account</h2>
 {% if request.query_params.get("password_ok") %}
@@ -395,7 +291,6 @@
   <div class="flash bad">{{ request.query_params.get("password_error") }}</div>
 {% endif %}
 <div class="panel">
-  <h3>Change password</h3>
   <form method="post" action="/settings/password" class="pw-form">
     <label>
       <span>Current password</span>
@@ -406,7 +301,7 @@
       <input type="password" name="new_password" required autocomplete="new-password"
              placeholder="At least 8 characters">
     </label>
-    <div><button class="btn primary" type="submit">Update password</button></div>
+    <div><button class="btn" type="submit">Update password</button></div>
   </form>
   <p class="sub" style="margin:12px 0 0">
     Signed in as {{ current_user.email if current_user else "" }}.

@@ -120,6 +120,31 @@ class TestLocationScoring:
         result = score(make_raw(location=None), prefs, profile)
         assert result.score > 40
 
+    def test_only_stated_countries_outside_the_allowlist_are_filtered(self, prefs, profile):
+        """A country you cannot work in is a hard filter -- but only if stated.
+
+        The allowlist existed in the schema as `allow_international` and was
+        never consulted anywhere, so there was no way to say "US only" at all.
+        """
+        prefs.locations.allowed_countries = ["US"]
+
+        abroad = normalize_job(make_raw(location="London, UK"))
+        assert hard_exclusions(abroad, prefs)[0] is True
+
+        home = normalize_job(make_raw(location="Santa Clara, CA"))
+        assert hard_exclusions(home, prefs)[0] is False
+
+        # Unknown is never disqualifying, the rule the whole pipeline follows.
+        unstated = normalize_job(make_raw(location=None))
+        assert hard_exclusions(unstated, prefs)[0] is False
+        remote = normalize_job(make_raw(location="Remote"))
+        assert hard_exclusions(remote, prefs)[0] is False
+
+    def test_an_empty_country_list_allows_anywhere(self, prefs, profile):
+        prefs.locations.allowed_countries = []
+        for where in ("London, UK", "Bangalore, India", "Santa Clara, CA"):
+            assert hard_exclusions(normalize_job(make_raw(location=where)), prefs)[0] is False
+
     def test_excluded_location_is_filtered(self, prefs, profile):
         from app.schemas.preferences import LocationRule
 

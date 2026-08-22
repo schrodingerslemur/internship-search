@@ -38,6 +38,50 @@ US_STATES: dict[str, str] = {
 }
 STATE_ABBREVS: frozenset[str] = frozenset(US_STATES.values())
 
+#: Countries as postings actually spell them, mapped to a two-letter code.
+#: Normalisation for the places that turn up in listings, not a geography
+#: database -- anything unrecognised is kept verbatim rather than discarded.
+COUNTRY_NAMES: dict[str, str] = {
+    "us": "US", "usa": "US", "u.s.": "US", "u.s.a.": "US", "america": "US",
+    "united states": "US", "united states of america": "US",
+    "ca": "CA", "canada": "CA",
+    "uk": "GB", "gb": "GB", "united kingdom": "GB", "england": "GB",
+    "great britain": "GB", "scotland": "GB", "wales": "GB",
+    "ie": "IE", "ireland": "IE",
+    "de": "DE", "germany": "DE", "deutschland": "DE",
+    "nl": "NL", "netherlands": "NL", "the netherlands": "NL",
+    "fr": "FR", "france": "FR",
+    "es": "ES", "spain": "ES",
+    "it": "IT", "italy": "IT",
+    "se": "SE", "sweden": "SE",
+    "ch": "CH", "switzerland": "CH",
+    "pl": "PL", "poland": "PL",
+    "in": "IN", "india": "IN",
+    "sg": "SG", "singapore": "SG",
+    "au": "AU", "australia": "AU",
+    "nz": "NZ", "new zealand": "NZ",
+    "jp": "JP", "japan": "JP",
+    "kr": "KR", "south korea": "KR", "korea": "KR",
+    "cn": "CN", "china": "CN",
+    "tw": "TW", "taiwan": "TW",
+    "hk": "HK", "hong kong": "HK",
+    "il": "IL", "israel": "IL",
+    "mx": "MX", "mexico": "MX",
+    "br": "BR", "brazil": "BR",
+    "ae": "AE", "uae": "AE", "united arab emirates": "AE",
+}
+
+
+def country_code(value: str | None) -> str:
+    """Best-effort two-letter code for a country as a posting spelled it."""
+    if not value:
+        return ""
+    text = " ".join(str(value).strip().lower().split())
+    for candidate in (text, text.replace(".", "")):
+        if candidate in COUNTRY_NAMES:
+            return COUNTRY_NAMES[candidate]
+    return str(value).strip().upper()
+
 #: Metro grouping. Two postings in the same metro may merge; different metros
 #: are treated as distinct positions (requirement: Austin != Santa Clara).
 METRO_ALIASES: dict[str, tuple[str, ...]] = {
@@ -118,11 +162,20 @@ def parse_location(raw: str | None) -> ParsedLocation:
         p_low = normalize_text(part)
         upper = part.strip().upper()
         if upper in STATE_ABBREVS:
+            # US states win ties with country codes -- DE is Delaware before
+            # Germany, CA California before Canada, IN Indiana before India.
+            # The corpus is overwhelmingly US, and the tie-break errs toward
+            # reading a location as domestic, which for a country filter means
+            # keeping a job rather than hiding one.
             state = upper
         elif p_low in US_STATES:
             state = US_STATES[p_low]
-        elif p_low in ("usa", "us", "united states", "united states of america"):
-            country = "US"
+        elif p_low in COUNTRY_NAMES:
+            # Recognised country name or code, at any length. The old rule only
+            # accepted names longer than three characters, so "London, UK" and
+            # "Berlin, DE" parsed with no country at all -- which meant a
+            # country filter could not see them.
+            country = COUNTRY_NAMES[p_low]
         elif len(p_low) > 3 and not state:
             country = part.strip()
     if state and not country:

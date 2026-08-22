@@ -469,33 +469,51 @@ def settings_page(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "settings.html", _settings_context(request, db, user)
+    )
+
+
+@router.get("/notifications", response_class=HTMLResponse)
+def notifications_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+) -> HTMLResponse:
+    """Emails and scheduling, split out of Settings.
+
+    Same preference document, same POST handler -- only the sections the form
+    declares are written, so the two pages cannot overwrite each other.
+    """
+    return templates.TemplateResponse(
+        request, "notifications.html", _settings_context(request, db, user)
+    )
+
+
+def _settings_context(request: Request, db: Session, user: User) -> dict:
     from app.notify.providers import provider_catalog
     from app.services import notify_config
     from app.sources.registry import source_catalog
 
     channel = notify_config.load(db)
     prefs = load_preferences(db, user=user)
-    return templates.TemplateResponse(
-        request,
-        "settings.html",
-        {
-            "prefs": prefs,
-            "catalog": source_catalog(),
-            "providers": provider_catalog(config=channel),
-            "channel": channel,
-            "channel_ready": channel.ready_for(prefs.notifications.provider),
-            "channel_missing": channel.missing_for(prefs.notifications.provider),
-            "digest_email": user.notification_email,
-            "counts": q.dashboard_counts(db, user),
-            "saved": request.query_params.get("saved") == "1",
-            "rescored": request.query_params.get("rescored"),
-            # `error` means the settings did not save. A delivery test that
-            # fails is a `notice`: the settings saved fine, the send did not.
-            "error": request.query_params.get("error"),
-            "notice": request.query_params.get("notice"),
-            "notice_bad": request.query_params.get("notice_bad") == "1",
-        },
-    )
+    return {
+        "prefs": prefs,
+        "catalog": source_catalog(),
+        "providers": provider_catalog(config=channel),
+        "channel": channel,
+        "channel_ready": channel.ready_for(prefs.notifications.provider),
+        "channel_missing": channel.missing_for(prefs.notifications.provider),
+        "digest_email": user.notification_email,
+        "counts": q.dashboard_counts(db, user),
+        "saved": request.query_params.get("saved") == "1",
+        "rescored": request.query_params.get("rescored"),
+        # `error` means the settings did not save. A delivery test that fails
+        # is a `notice`: the settings saved fine, the send did not.
+        "error": request.query_params.get("error"),
+        "notice": request.query_params.get("notice"),
+        "notice_bad": request.query_params.get("notice_bad") == "1",
+    }
 
 
 @router.post("/settings")
@@ -525,6 +543,15 @@ async def settings_save(
 
     def flag(field: str) -> bool:
         return str(form.get(field, "")).lower() in ("1", "true", "on", "yes")
+
+    # Settings are split across more than one page now, and an unchecked
+    # checkbox is indistinguishable from a checkbox that was never on the page.
+    # Each form declares which sections it carries, so submitting the search
+    # page cannot silently switch every notification toggle off.
+    sections = set(form.getlist("_section")) or {
+        "search", "location", "constraints", "ranking", "scope",
+        "notifications", "schedule",
+    }
 
     # Roles: one per line, optional "name | weight".
     roles = []
@@ -564,6 +591,13 @@ async def settings_save(
         data["locations"]["rules"] = rules
     data["locations"]["remote_bonus"] = num("remote_bonus", 7.0)
     data["locations"]["other_us_bonus"] = num("other_us_bonus", 2.0)
+    if "location" in sections:
+        # "Anywhere" is the empty list, which is also the schema default, so the
+        # absence of a restriction is represented by an absence rather than a
+        # sentinel country.
+        data["locations"]["allowed_countries"] = [
+            c for c in form.getlist("allowed_countries") if str(c).strip()
+        ]
 
     data["companies"]["preferred"] = lines("companies_preferred")
     data["companies"]["blacklisted"] = lines("companies_blacklisted")
@@ -595,30 +629,33 @@ async def settings_save(
     for name in ("apply_now", "strong_match", "worth_considering", "maybe"):
         data["thresholds"][name] = num(f"threshold_{name}", data["thresholds"][name])
 
-    data["notifications"]["enabled"] = flag("notifications_enabled")
-    data["notifications"]["provider"] = str(form.get("notification_provider", "telegram"))
-    data["notifications"]["min_score"] = num("notification_min_score", 80.0)
-    data["notifications"]["max_jobs_per_notification"] = int(
-        num("notification_max_jobs", 7)
-    )
-    data["notifications"]["send_when_empty"] = flag("send_when_empty")
-    data["notifications"]["notify_on_updates"] = flag("notify_on_updates")
+    if "notifications" in sections:
+        data["notifications"]["enabled"] = flag("notifications_enabled")
+        data["notifications"]["provider"] = str(form.get("notification_provider", "telegram"))
+        data["notifications"]["min_score"] = num("notification_min_score", 80.0)
+        data["notifications"]["max_jobs_per_notification"] = int(
+            num("notification_max_jobs", 7)
+        )
+        data["notifications"]["send_when_empty"] = flag("send_when_empty")
+        data["notifications"]["notify_on_updates"] = flag("notify_on_updates")
 
-    data["schedule"]["enabled"] = flag("schedule_enabled")
-    data["schedule"]["timezone"] = str(form.get("timezone", "America/New_York"))
-    data["schedule"]["morning_enabled"] = flag("morning_enabled")
-    data["schedule"]["morning_time"] = str(form.get("morning_time", "08:00"))
-    data["schedule"]["afternoon_enabled"] = flag("afternoon_enabled")
-    data["schedule"]["afternoon_time"] = str(form.get("afternoon_time", "16:00"))
-    data["schedule"]["cadence"] = str(form.get("cadence", "all"))
+    if "schedule" in sections:
+        data["schedule"]["enabled"] = flag("schedule_enabled")
+        data["schedule"]["timezone"] = str(form.get("timezone", "America/New_York"))
+        data["schedule"]["morning_enabled"] = flag("morning_enabled")
+        data["schedule"]["morning_time"] = str(form.get("morning_time", "08:00"))
+        data["schedule"]["afternoon_enabled"] = flag("afternoon_enabled")
+        data["schedule"]["afternoon_time"] = str(form.get("afternoon_time", "16:00"))
+        data["schedule"]["cadence"] = str(form.get("cadence", "all"))
 
-    data["scope"]["max_ats_boards_per_run"] = int(num("max_ats_boards", 400))
-    data["scope"]["max_expanded_queries"] = int(num("max_queries", 60))
-    data["scope"]["query_expansion"] = flag("query_expansion")
-    data["scope"]["min_score_to_store"] = num("min_score_to_store", 25.0)
-    data["scope"]["llm_semantic_matching"] = flag("llm_semantic_matching")
-    data["scope"]["llm_dedup_adjudication"] = flag("llm_dedup_adjudication")
-    data["scope"]["disabled_sources"] = form.getlist("disabled_sources")
+    if "scope" in sections:
+        data["scope"]["max_ats_boards_per_run"] = int(num("max_ats_boards", 400))
+        data["scope"]["max_expanded_queries"] = int(num("max_queries", 60))
+        data["scope"]["query_expansion"] = flag("query_expansion")
+        data["scope"]["min_score_to_store"] = num("min_score_to_store", 25.0)
+        data["scope"]["llm_semantic_matching"] = flag("llm_semantic_matching")
+        data["scope"]["llm_dedup_adjudication"] = flag("llm_dedup_adjudication")
+        data["scope"]["disabled_sources"] = form.getlist("disabled_sources")
 
     from app.schemas.preferences import SearchPreferences
 
@@ -710,7 +747,10 @@ async def settings_save(
 
         reschedule(scheduler, validated.schedule)
 
-    target = f"/settings?saved=1&rescored={rescored}"
+    back = str(form.get("_return") or "/settings")
+    if not back.startswith("/") or back.startswith("//"):
+        back = "/settings"          # never redirect off-site on form input
+    target = f"{back}?saved=1&rescored={rescored}"
     if channel_warning:
         target += f"&notice={quote(channel_warning)}&notice_bad=1"
     return RedirectResponse(target, status_code=303)

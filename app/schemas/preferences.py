@@ -77,7 +77,32 @@ class LocationPrefs(BaseModel):
     international_bonus: float = 0.0
     #: Applied when location cannot be determined. Never treated as exclusion.
     unknown_bonus: float = 0.0
-    allow_international: bool = True
+    #: Countries you can actually work in, as two-letter codes. Empty means no
+    #: restriction. This is a hard filter -- somewhere you cannot take a job is
+    #: not a low-scoring job, it is not a job -- but only ever against a country
+    #: the posting actually stated. A listing whose country could not be parsed
+    #: is never excluded, in keeping with "unknown is not disqualifying".
+    allowed_countries: list[str] = Field(default_factory=list)
+
+    @field_validator("allowed_countries")
+    @classmethod
+    def _normalise_countries(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for item in v:
+            code = str(item).strip().upper()
+            if code and code not in out:
+                out.append(code)
+        return out
+
+    def country_allowed(self, country: str | None) -> bool:
+        """Whether a posting in this country is acceptable at all."""
+        if not self.allowed_countries:
+            return True
+        if not country or not str(country).strip():
+            return True  # unknown is never disqualifying
+        from app.pipeline.extract import country_code
+
+        return country_code(country) in self.allowed_countries
 
     def bonus_for(self, location: str | None) -> tuple[float, str]:
         """Return (bonus, explanation) for a location string."""

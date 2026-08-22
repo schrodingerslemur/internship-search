@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}Emails and schedule · Internship Search{% endblock %}
+{% block content %}
+{#
+  Everything about *when you hear from us*, split out of Settings. These twenty
+  fields answer a different question from "what are you looking for", and mixing
+  them made both harder to read.
+
+  Posts to /settings with `_section` markers naming only the parts this form
+  owns, so saving here cannot disturb your roles or locations.
+#}
+<h1>Emails and schedule</h1>
+<div class="sub">When we search, and how you hear about it.</div>
+
+{% if saved %}<div class="flash ok">Saved.</div>{% endif %}
+{% if error %}<div class="flash bad">Could not save: {{ error }}</div>{% endif %}
+{% if notice %}<div class="flash {{ 'bad' if notice_bad else 'ok' }}">{{ notice }}</div>{% endif %}
+
+<form method="post" action="/settings">
+<input type="hidden" name="_section" value="notifications">
+<input type="hidden" name="_section" value="schedule">
+<input type="hidden" name="_return" value="/notifications">
+
+<div class="panel setting-group">
+  <div class="setting">
+    <label for="notification_provider">Send me matches</label>
+    <div class="ctl">
+      <div class="inline">
+        <label class="inline-check">
+          <input type="checkbox" name="notifications_enabled" {% if prefs.notifications.enabled %}checked{% endif %}>
+          <span>Yes, via</span>
+        </label>
+        <select id="notification_provider" name="notification_provider" style="width:auto">
+          {% for p in providers %}
+            <option value="{{ p.name }}" {% if prefs.notifications.provider == p.name %}selected{% endif %}>
+              {{ p.display_name }}{% if not p.configured %} (needs setting up){% endif %}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="setting">
+    <label for="notification_min_score">Only jobs matching</label>
+    <div class="ctl">
+      <div class="inline">
+        <input id="notification_min_score" name="notification_min_score" type="number"
+               style="width:5.5em" value="{{ prefs.notifications.min_score }}">
+        <span class="help" style="margin:0">out of 100 or better, at most</span>
+        <input id="notification_max_jobs" name="notification_max_jobs" type="number"
+               style="width:5em" value="{{ prefs.notifications.max_jobs_per_notification }}">
+        <span class="help" style="margin:0">per email</span>
+      </div>
+      <div class="help">Lower the score if your emails feel too sparse.</div>
+    </div>
+  </div>
+
+  <div class="setting">
+    <label>Also</label>
+    <div class="ctl">
+      <label class="inline-check">
+        <input type="checkbox" name="send_when_empty" {% if prefs.notifications.send_when_empty %}checked{% endif %}>
+        <span>Email me even when there's nothing new</span>
+      </label>
+      <label class="inline-check" style="margin-top:6px">
+        <input type="checkbox" name="notify_on_updates" {% if prefs.notifications.notify_on_updates %}checked{% endif %}>
+        <span>Tell me when a job I've seen changes</span>
+      </label>
+      <div class="help">
+        You are never emailed the same job twice, and never emailed a job you've
+        applied to or dismissed. A job that materially changes can come back once,
+        at most every {{ prefs.notifications.update_cooldown_hours }} hours.
+      </div>
+    </div>
+  </div>
+</div>
+
+{# Choosing a channel and setting it up are one action, not two screens. #}
+<div class="channel-setup" data-provider="email"
+     {% if prefs.notifications.provider != 'email' %}hidden{% endif %}>
+  <h2>Email setup</h2>
+  <div class="panel">
+    <div class="row">
+      <div class="field"><label for="digest_email">Send my emails to</label>
+        <input id="digest_email" name="digest_email" value="{{ digest_email or '' }}"
+               placeholder="you@example.com"></div>
+      <div class="field"><label for="smtp_host">Mail server</label>
+        <input id="smtp_host" name="smtp_host" value="{{ channel.smtp_host or '' }}" placeholder="smtp.gmail.com"></div>
+      <div class="field"><label for="smtp_port">Port</label>
+        <input id="smtp_port" name="smtp_port" type="number" value="{{ channel.smtp_port or 587 }}"></div>
+      <div class="field"><label for="smtp_user">Mail account</label>
+        <input id="smtp_user" name="smtp_user" value="{{ channel.smtp_user or '' }}" placeholder="you@gmail.com"></div>
+      <div class="field"><label for="smtp_password">Mail password</label>
+        <input id="smtp_password" name="smtp_password" type="password" autocomplete="new-password"
+               placeholder="{{ '•••••••• (unchanged)' if channel.smtp_password else 'Gmail app password' }}">
+        <div class="help">
+          Gmail needs an app password, not your account password. Paste it exactly
+          as Google shows it &mdash; the spaces are removed for you.
+        </div></div>
+      <div class="field"><label for="email_from">Send from</label>
+        <input id="email_from" name="email_from" value="{{ channel.email_from or '' }}"
+               placeholder="defaults to the mail account"></div>
+    </div>
+  </div>
+</div>
+
+<div class="channel-setup" data-provider="telegram"
+     {% if prefs.notifications.provider != 'telegram' %}hidden{% endif %}>
+  <h2>Telegram setup</h2>
+  <div class="panel">
+    <div class="row">
+      <div class="field"><label for="telegram_bot_token">Bot token</label>
+        <input id="telegram_bot_token" name="telegram_bot_token" type="password" autocomplete="new-password"
+               placeholder="{{ '•••••••• (unchanged)' if channel.telegram_bot_token else 'from @BotFather' }}"></div>
+      <div class="field"><label for="telegram_chat_id">Chat ID</label>
+        <input id="telegram_chat_id" name="telegram_chat_id" value="{{ channel.telegram_chat_id or '' }}"></div>
+    </div>
+  </div>
+</div>
+
+<div class="note {{ '' if channel_ready else 'warn' }}">
+  {% if channel_ready %}
+    ✓ <strong>{{ prefs.notifications.provider|humanize }}</strong> is set up and ready.
+  {% else %}
+    ⚠ <strong>{{ prefs.notifications.provider|humanize }}</strong> still needs:
+    {{ channel_missing|join(', ') }}. Until it's complete, digests stay off &mdash;
+    everything else on this page still saves.
+  {% endif %}
+  <button class="btn sm" type="submit" formaction="/settings/test-channel" formnovalidate
+          style="margin-left:8px">Save and send a test</button>
+  <div class="help" style="margin-top:8px">
+    A test that times out usually means this computer blocks outgoing mail, not
+    that your settings are wrong &mdash; scheduled emails send from elsewhere and
+    are unaffected.
+  </div>
+</div>
+
+<h2>When we search</h2>
+<div class="panel setting-group">
+  <div class="setting">
+    <label for="timezone">Automatically</label>
+    <div class="ctl">
+      <div class="inline">
+        <label class="inline-check">
+          <input type="checkbox" name="schedule_enabled" {% if prefs.schedule.enabled %}checked{% endif %}>
+          <span>Yes, in</span>
+        </label>
+        <select id="timezone" name="timezone" style="width:auto">
+          {% set zones = ['America/New_York','America/Chicago','America/Denver','America/Los_Angeles',
+                          'America/Anchorage','Pacific/Honolulu','Europe/London','Europe/Berlin',
+                          'Asia/Kolkata','Asia/Singapore','Asia/Tokyo','Australia/Sydney','UTC'] %}
+          {% if prefs.schedule.timezone not in zones %}
+            <option value="{{ prefs.schedule.timezone }}" selected>{{ prefs.schedule.timezone }}</option>
+          {% endif %}
+          {% for z in zones %}
+            <option value="{{ z }}" {% if prefs.schedule.timezone == z %}selected{% endif %}>{{ z.replace('_',' ') }}</option>
+          {% endfor %}
+        </select>
+        <select name="cadence" style="width:auto">
+          <option value="all" {% if prefs.schedule.cadence=='all' %}selected{% endif %}>every day</option>
+          <option value="weekdays" {% if prefs.schedule.cadence=='weekdays' %}selected{% endif %}>on weekdays</option>
+        </select>
+      </div>
+      <div class="help">With this off, jobs only arrive when you press &ldquo;Search now&rdquo;.</div>
+    </div>
+  </div>
+
+  <div class="setting">
+    <label for="morning_time">At</label>
+    <div class="ctl">
+      <div class="inline">
+        <label class="inline-check">
+          <input type="checkbox" name="morning_enabled" {% if prefs.schedule.morning_enabled %}checked{% endif %}>
+          <span>Morning</span>
+        </label>
+        <input id="morning_time" name="morning_time" type="time" value="{{ prefs.schedule.morning_time }}"
+               style="width:auto">
+        <label class="inline-check" style="margin-left:10px">
+          <input type="checkbox" name="afternoon_enabled" {% if prefs.schedule.afternoon_enabled %}checked{% endif %}>
+          <span>Afternoon</span>
+        </label>
+        <input id="afternoon_time" name="afternoon_time" type="time" value="{{ prefs.schedule.afternoon_time }}"
+               style="width:auto">
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="save-bar">
+  <button class="btn primary" type="submit">Save</button>
+  <a class="btn" href="/settings">&larr; What you're looking for</a>
+</div>
+</form>
+
+<script>
+// Show only the selected channel's fields; the others stay in the DOM so a
+// half-filled setup is not lost by toggling the select back and forth.
+(function () {
+  const select = document.querySelector('select[name=notification_provider]');
+  if (!select) return;
+  const sync = () => document.querySelectorAll('.channel-setup').forEach(
+    el => { el.hidden = el.dataset.provider !== select.value; }
+  );
+  select.addEventListener('change', sync);
+  sync();
+})();
+</script>
+{% endblock %}

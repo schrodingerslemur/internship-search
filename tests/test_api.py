@@ -579,10 +579,11 @@ class TestChannelSetup:
         )
         assert "saved=1" in response.headers["location"]
 
-    def test_the_settings_page_reports_the_real_state(self, client, session):
+    def test_the_notifications_page_reports_the_real_state(self, client, session):
+        """Channel readiness is reported where the channel is configured."""
         from app.services import notify_config
 
-        assert "still needs" in client.get("/settings").text
+        assert "still needs" in client.get("/notifications").text
 
         notify_config.save(
             session,
@@ -594,7 +595,64 @@ class TestChannelSetup:
                 smtp_host="smtp.example.com", smtp_user="a@b.c", smtp_password="secret"
             ),
         )
-        assert "is set up and ready" in client.get("/settings").text
+        assert "is set up and ready" in client.get("/notifications").text
+
+
+class TestSettingsPageSplit:
+    """Search preferences and notification setup live on separate pages.
+
+    They share one preference document and one POST handler, so the risk is
+    that saving one page silently resets the other's checkboxes -- an absent
+    checkbox and an unticked one look identical in a form post.
+    """
+
+    def test_saving_search_preferences_leaves_notifications_alone(self, client, session):
+        from app.services.preferences import load_preferences, save_preferences
+
+        prefs = load_preferences(session)
+        prefs.notifications.send_when_empty = True
+        prefs.schedule.morning_time = "06:30"
+        save_preferences(session, prefs)
+
+        # The search page carries no notification fields at all.
+        client.post(
+            "/settings",
+            data={
+                "_section": ["search", "location", "constraints", "ranking", "scope"],
+                "roles": "FPGA Engineer Intern",
+            },
+        )
+
+        after = load_preferences(session)
+        assert after.notifications.send_when_empty is True
+        assert after.schedule.morning_time == "06:30"
+        assert [r.name for r in after.roles] == ["FPGA Engineer Intern"]
+
+    def test_country_restriction_saves_from_the_form(self, client, session):
+        from app.services.preferences import load_preferences
+
+        client.post(
+            "/settings",
+            data={
+                "_section": ["search", "location", "constraints", "ranking", "scope"],
+                "roles": "FPGA Engineer Intern",
+                "allowed_countries": ["US", "CA"],
+            },
+        )
+        assert load_preferences(session).locations.allowed_countries == ["US", "CA"]
+
+        # Selecting nothing means anywhere, not "no countries allowed".
+        client.post(
+            "/settings",
+            data={
+                "_section": ["search", "location", "constraints", "ranking", "scope"],
+                "roles": "FPGA Engineer Intern",
+            },
+        )
+        assert load_preferences(session).locations.allowed_countries == []
+
+    def test_notifications_page_renders(self, client):
+        assert client.get("/notifications").status_code == 200
 
 
 class TestCredentialNormalisation:
