@@ -9,7 +9,13 @@ from app.pipeline.match import classify_priority, hard_exclusions, score_job
 from app.pipeline.normalize import normalize_job
 from app.pipeline.queries import expand_role, generate_queries
 from app.schemas.preferences import TargetRole
-from tests.conftest import NOW, SENIOR_DESCRIPTION, SOFTWARE_DESCRIPTION, make_raw
+from tests.conftest import (
+    FPGA_DESCRIPTION,
+    NOW,
+    SENIOR_DESCRIPTION,
+    SOFTWARE_DESCRIPTION,
+    make_raw,
+)
 
 
 def score(raw, prefs, profile):
@@ -80,12 +86,15 @@ class TestExperienceAndEligibility:
         assert "10+ years experience" in result.missing_requirements
 
     def test_negative_keywords_in_title_hurt_more_than_in_body(self, prefs, profile):
-        in_title = score(make_raw(title="Senior FPGA Intern"), prefs, profile)
-        in_body = score(
-            make_raw(title="FPGA Design Intern",
-                     description="You will report to a senior engineer. FPGA and RTL work."),
-            prefs, profile,
-        )
+        """Both postings carry the same body, so only the title differs.
+
+        Holding the description constant is the whole point: with two different
+        descriptions this compared skill overlap as much as it compared the
+        seniority penalty, and passed for the wrong reason.
+        """
+        body = FPGA_DESCRIPTION + "\nYou will report to a senior engineer."
+        in_title = score(make_raw(title="Senior FPGA Intern", description=body), prefs, profile)
+        in_body = score(make_raw(title="FPGA Design Intern", description=body), prefs, profile)
         assert in_body.score > in_title.score
 
     def test_phd_requirement_is_flagged(self, prefs, profile):

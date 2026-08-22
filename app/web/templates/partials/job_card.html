@@ -21,7 +21,9 @@
 
   <div class="body">
     <h3 class="ti" id="job-title-{{ job.id }}">
-      <a href="/job/{{ job.id }}">{{ job.title }}</a>
+      {# The stretched link makes the whole card a target. Buttons and the
+         other links inside sit above it, so they still take their own clicks. #}
+      <a class="stretch" href="/job/{{ job.id }}">{{ job.title }}</a>
     </h3>
     <div class="co">
       {{ job.company_name }}
@@ -60,12 +62,30 @@
       {% endif %}
     </div>
 
+    {# Reasons and concerns both come from this user's own scoring, never a
+       mix of theirs and the shared row's. #}
     {% set reasons = (v.reasons if v else job.match_reasons) or [] %}
-    {% if reasons or job.concerns %}
+    {% set concerns = (v.concerns if v and v.concerns else job.concerns) or [] %}
+    {% set matched_role = (v.breakdown if v else job.score_breakdown or {}) %}
+    {% set role_name = ((matched_role.get('role_match') or {}).get('matched_role')) %}
+    {% if reasons or concerns %}
       <div class="chips">
+        {% if role_name %}
+          {# Which of your configured roles this title matched. Not a link:
+             the role filter matches title text, and a role name like
+             "Hardware Engineer Intern" rarely appears verbatim in a title --
+             which is the whole reason matching is fuzzy. #}
+          <span class="chip role" title="Matched one of your target roles">🎯 {{ role_name }}</span>
+        {% endif %}
         {% for reason in reasons[:4] %}<span class="chip good">✓ {{ reason }}</span>{% endfor %}
-        {% for c in (job.concerns or [])[:2] %}<span class="chip warn">⚠ {{ c }}</span>{% endfor %}
+        {% for c in concerns[:2] %}<span class="chip warn">⚠ {{ c }}</span>{% endfor %}
       </div>
+    {% endif %}
+
+    {# Two lines of the posting: enough to triage without opening it, and it
+       makes a listing that arrived with no description visibly obvious. #}
+    {% if job.description %}
+      <p class="snippet">{{ job.description|truncate_text(190) }}</p>
     {% endif %}
 
     {% if v and v.applied_at %}

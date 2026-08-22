@@ -470,11 +470,40 @@ class TestChannelSetup:
         base.update(overrides)
         return base
 
-    def test_selecting_an_unconfigured_provider_is_refused(self, client, session):
+    def test_enabling_an_unconfigured_provider_is_refused(self, client, session):
+        """Digests stay off, and the message says which credentials are missing."""
+        from app.services.preferences import load_preferences
+
         response = client.post("/settings", data=self._form(), follow_redirects=False)
         assert response.status_code == 303
-        assert "error=" in response.headers["location"]
-        assert "smtp" in response.headers["location"].lower()
+        location = response.headers["location"]
+        assert "notice_bad=1" in location
+        assert "smtp" in location.lower()
+        assert load_preferences(session).notifications.enabled is False
+
+    def test_an_unconfigured_channel_does_not_discard_the_rest_of_the_form(
+        self, client, session
+    ):
+        """The regression that made every other setting look ignored.
+
+        Refusing the notification channel used to roll the whole transaction
+        back, so on an instance with no credentials nothing on the settings
+        page could ever be saved -- deleting a target role appeared to do
+        nothing, because the deletion really was being thrown away.
+        """
+        from app.services.preferences import load_preferences
+
+        response = client.post(
+            "/settings",
+            data=self._form(roles="FPGA Engineer Intern\nRTL Design Intern"),
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+        prefs = load_preferences(session)
+        assert [r.name for r in prefs.roles] == ["FPGA Engineer Intern", "RTL Design Intern"]
+        # ...and the channel was still refused, rather than quietly accepted.
+        assert prefs.notifications.enabled is False
 
     def test_supplying_credentials_in_the_same_submission_succeeds(self, client, session):
         from app.services import notify_config

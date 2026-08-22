@@ -239,6 +239,40 @@ def score_jobs_for_user(
     return scored
 
 
+def rescore_all_for_user(
+    session: Session,
+    user: User,
+    prefs=None,
+    profile=None,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Re-score this user's whole active corpus against current preferences.
+
+    Called whenever preferences or the profile change. Without it a stored
+    score is a snapshot of the settings that were in force when the job was
+    crawled: removing a target role changed what future searches looked for
+    and left every job already in the database ranked as though the role were
+    still wanted, which is indistinguishable from the setting being ignored.
+
+    Scoring is pure CPU over rows already being loaded, so at corpus sizes in
+    the low tens of thousands this is comfortably inline.
+    """
+    from app.services.preferences import load_preferences, load_profile
+
+    jobs = list(session.scalars(select(Job).where(Job.is_active.is_(True))).all())
+    if not jobs:
+        return 0
+    return score_jobs_for_user(
+        session,
+        user,
+        jobs,
+        prefs if prefs is not None else load_preferences(session, user=user),
+        profile if profile is not None else load_profile(session, user=user),
+        now=now,
+    )
+
+
 def score_of(state: UserJobState | None, job: Job) -> float:
     """This user's score, falling back to the shared one when unscored."""
     if state is not None and state.relevance_score is not None:
@@ -267,6 +301,17 @@ def view_for(session: Session, user: User, jobs: list[Job]) -> dict[int, dict]:
             "priority": priority_of(state, job),
             "status": status_of(state),
             "reasons": (state.match_reasons if state else None) or job.match_reasons or [],
+            # The breakdown, concerns and missing requirements have to come
+            # from the same place the score did. Showing this user's score
+            # beside the shared row's component bars is how a detail page ends
+            # up explaining a number it is not displaying.
+            "breakdown": (state.score_breakdown if state else None) or job.score_breakdown or {},
+            "concerns": (state.concerns if state else None) or job.concerns or [],
+            "missing_requirements": (
+                (state.missing_requirements if state else None)
+                or job.missing_requirements
+                or []
+            ),
             "notified": bool(state.notified) if state else False,
             "saved_at": state.saved_at if state else None,
             "applied_at": state.applied_at if state else None,

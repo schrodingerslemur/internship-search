@@ -11,6 +11,46 @@
   <div class="note">A search was started in the background. Reload in a minute to see results.</div>
 {% endif %}
 
+{# The gap nothing else reports: a company you named that the crawl is not
+   reaching. Without this the ranking looks healthy while the employer you most
+   wanted is simply absent, and "not hiring" cannot be told from "never
+   searched". #}
+{% set gaps = (preferred_coverage or [])|rejectattr('state', 'equalto', 'ok')|list %}
+{% if gaps %}
+<h2>Companies you asked for, but aren't seeing</h2>
+<div class="panel">
+  <table>
+    <thead><tr><th>Company</th><th>Internships</th><th>Any jobs</th><th>What this means</th></tr></thead>
+    <tbody>
+    {% for c in gaps %}
+      <tr>
+        <td><strong>{{ c.name }}</strong></td>
+        <td>{{ c.internships }}</td>
+        <td>{{ c.jobs }}</td>
+        <td>
+          {% if c.state == 'missing' %}
+            <span style="color:var(--bad)">✗ Nothing found at all</span>
+            <div class="help">
+              No career page is registered for {{ c.name }}, so it has never been
+              searched. Add its board on this page, or check the spelling against
+              how the employer names itself.
+            </div>
+          {% else %}
+            <span style="color:var(--warn)">⚠ Found, but no internships</span>
+            <div class="help">
+              {{ c.jobs }} job{{ '' if c.jobs == 1 else 's' }} reached us from
+              {{ c.name }}, none of them an internship or co-op. They may not have
+              opened any yet this season.
+            </div>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 {% if latest %}
 <h2>Latest run &middot; {{ latest.started_at|timeago }} &middot; {{ latest.status|upper }}</h2>
 <div class="stats">

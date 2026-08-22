@@ -455,7 +455,9 @@ def dashboard_counts(session: Session, user: User | None = None) -> dict[str, in
     }
 
 
-def facet_values(session: Session, limit: int = 30) -> dict[str, list]:
+def facet_values(
+    session: Session, limit: int = 30, user: User | None = None
+) -> dict[str, list]:
     """Distinct values for the filter dropdowns."""
     companies = [
         row[0]
@@ -493,11 +495,24 @@ def facet_values(session: Session, limit: int = 30) -> dict[str, list]:
             skills[skill] = skills.get(skill, 0) + 1
     top_skills = [name for name, _ in sorted(skills.items(), key=lambda kv: -kv[1])[:limit]]
 
+    # How many jobs each match-score option would actually return. A filter
+    # offering "90+ match" when nothing in the corpus reaches 90 produces an
+    # empty page and no explanation for it.
+    score_col = effective_score(user)
+    score_counts = {
+        threshold: session.scalar(
+            select(func.count(Job.id)).where(Job.is_active.is_(True), score_col >= threshold)
+        )
+        or 0
+        for threshold in (60, 70, 80, 90)
+    }
+
     return {
         "companies": companies,
         "sources": sources,
         "locations": locations,
         "skills": top_skills,
+        "score_counts": score_counts,
         "priorities": [p.value for p in Priority],
         "statuses": [s.value for s in JobStatus],
     }
@@ -633,6 +648,61 @@ def source_yield_stats(session: Session, days: int = 30) -> list[dict[str, Any]]
             }
         )
     return sorted(out, key=lambda d: -d["strong_matches"])
+
+
+def preferred_company_coverage(
+    session: Session, preferred: list[str]
+) -> list[dict[str, Any]]:
+    """Which named-preferred companies the crawl is actually reaching.
+
+    A company on the preferred list with no internships found is the failure
+    mode nothing else reports: the ranking looks healthy, the digests go out,
+    and the employer the user most wanted is simply absent because no board
+    was ever registered for it. Silence is indistinguishable from "they are
+    not hiring" unless it is stated.
+    """
+    from app.pipeline.textutil import slugify_company
+
+    if not preferred:
+        return []
+
+    rows = session.execute(
+        select(Job.company_name, func.count(Job.id))
+        .where(Job.is_active.is_(True))
+        .group_by(Job.company_name)
+    ).all()
+    intern_rows = session.execute(
+        select(Job.company_name, func.count(Job.id))
+        .where(
+            Job.is_active.is_(True),
+            Job.employment_type.in_(["internship", "co_op"]),
+        )
+        .group_by(Job.company_name)
+    ).all()
+
+    totals: dict[str, int] = {}
+    interns: dict[str, int] = {}
+    for name, count in rows:
+        totals[slugify_company(name)] = totals.get(slugify_company(name), 0) + count
+    for name, count in intern_rows:
+        interns[slugify_company(name)] = interns.get(slugify_company(name), 0) + count
+
+    out = []
+    for name in preferred:
+        slug = slugify_company(name)
+        total = totals.get(slug, 0)
+        intern = interns.get(slug, 0)
+        if intern:
+            state = "ok"
+        elif total:
+            state = "no_internships"
+        else:
+            state = "missing"
+        out.append({"name": name, "slug": slug, "jobs": total,
+                    "internships": intern, "state": state})
+    # Problems first: the point of the list is the companies that need action.
+    return sorted(out, key=lambda d: ({"missing": 0, "no_internships": 1, "ok": 2}[d["state"]],
+                                      d["name"].lower()))
 
 
 def recent_runs(session: Session, limit: int = 20) -> list[SearchRun]:

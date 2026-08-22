@@ -229,6 +229,9 @@ class SourceOutcome(BaseModel):
     error: str | None = None
     #: ATS boards / companies this source revealed for future crawling.
     discovered_boards: list[dict[str, Any]] = Field(default_factory=list)
+    #: Listings returned per registered board id, so crawl bookkeeping can tell
+    #: a productive board from one that succeeds and returns nothing.
+    board_yield: dict[int, int] = Field(default_factory=dict)
 
     @property
     def job_count(self) -> int:

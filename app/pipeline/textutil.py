@@ -18,6 +18,15 @@ _COMPANY_SUFFIXES = (
     "solutions", "systems", "laboratories", "labs", "group", "limited",
     "company", "corp", "inc", "llc", "ltd", "plc", "gmbh", "co", "sa", "ag",
     "nv", "bv", "pte", "pvt", "the",
+    # Finance and trading houses advertise under both the bare name and the
+    # full one -- "IMC" and "IMC Trading", "Jump Trading" and "Jump Trading
+    # Group". Treated as distinct employers they split the preferred-company
+    # boost and show the same posting twice.
+    #
+    # Deliberately no geographic words here. "America" would reduce "Bank of
+    # America" to "bank of", which collides with every other "Bank of ...".
+    "trading", "capital", "partners", "management", "securities", "markets",
+    "ventures", "associates",
 )
 
 #: Well-known aliases so the same employer collapses to one company record.
@@ -156,6 +165,141 @@ def normalize_title(title: str | None) -> str:
 
 def title_tokens(title: str | None) -> frozenset[str]:
     return frozenset(t for t in normalize_title(title).split() if len(t) > 1)
+
+
+# --------------------------------------------------------------------------
+# Role affinity
+#
+# Dedup asks "are these the same posting?", which is a symmetric question and
+# is answered by `token_set_ratio` below. Ranking asks a different, directional
+# one: "does this title contain the role I am looking for?" A title may carry
+# the team, the term and the requisition alongside the role and still be a
+# perfect match, so the two questions need two functions.
+# --------------------------------------------------------------------------
+
+#: Morphological variants collapsed before comparison. Job titles use these
+#: interchangeably -- "Hardware Engineering Intern" and "Hardware Engineer
+#: Intern" are the same posting written by two different recruiters.
+ROLE_STEMS: dict[str, str] = {
+    "engineering": "engineer", "engineers": "engineer", "engineer": "engineer",
+    "designer": "design", "designs": "design", "designing": "design",
+    "development": "develop", "developer": "develop", "developing": "develop",
+    "verification": "verify", "validation": "verify", "verifying": "verify",
+    "architecture": "architect", "architectures": "architect",
+    "systems": "system", "programming": "program", "programmer": "program",
+    "internship": "intern", "internships": "intern", "interns": "intern",
+    "coop": "intern", "researcher": "research", "analytics": "analyst",
+}
+
+#: Tokens present in nearly every internship title, which therefore separate
+#: nothing. Left in, they inflate both sides of the comparison and let two
+#: unrelated roles look similar because both end in "Intern".
+ROLE_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "intern", "co", "op", "the", "of", "and", "for", "new", "at", "in", "to",
+        "undergraduate", "undergrad", "graduate", "grad", "campus", "student",
+        "summer", "fall", "autumn", "spring", "winter", "year", "years", "level",
+        "phd", "masters", "master", "ms", "bs", "ba", "part", "full", "time",
+        "opportunity", "opportunities", "position", "role", "job", "career",
+        "i", "ii", "iii", "temporary", "seasonal", "paid", "unpaid",
+    }
+)
+
+#: Domain equivalences. An employer advertising "Silicon Design Engineering"
+#: and one advertising "Hardware Engineering" are hiring for the same thing;
+#: only the house style differs.
+ROLE_SYNONYMS: dict[str, str] = {
+    "silicon": "hardware", "asic": "hardware", "soc": "hardware",
+    "vlsi": "hardware", "chip": "hardware", "ic": "hardware",
+    "semiconductor": "hardware", "circuit": "hardware", "circuits": "hardware",
+    "firmware": "embedded", "microcontroller": "embedded",
+    "swe": "software", "sde": "software",
+    "ai": "ml", "machine": "ml", "learning": "ml",
+    "fpgas": "fpga", "gpu": "hardware", "cpu": "hardware",
+}
+
+#: Words in a role phrase that describe *seniority or function* rather than
+#: *domain*. A role must match on something more specific than these, or
+#: "Project Engineer Intern" would satisfy "Hardware Engineer Intern".
+GENERIC_ROLE_WORDS: frozenset[str] = frozenset(
+    {"engineer", "design", "develop", "system", "technical", "technology", "program"}
+)
+
+#: A title carrying one of these is in a different discipline entirely, however
+#: many words it happens to share. Without this guard, recall-based matching
+#: scores "Mechanical Engineer, Robotics Hardware" as a hardware role.
+FOREIGN_DISCIPLINES: frozenset[str] = frozenset(
+    {
+        "mechanical", "mechanic", "technician", "civil", "chemical", "biomedical",
+        "industrial", "manufacturing", "environmental", "structural", "aerospace",
+        "sales", "marketing", "recruiting", "recruiter", "hr", "finance",
+        "accounting", "accountant", "audit", "legal", "compliance", "paralegal",
+        "nursing", "nurse", "clinical", "biology", "chemistry", "pharmacy",
+        "journalism", "news", "editorial", "photographer", "teaching", "teacher",
+        "construction", "logistics", "warehouse", "retail", "hospitality",
+        "communications", "publicity", "advertising", "merchandising",
+    }
+)
+
+
+def role_tokens(text: str | None) -> frozenset[str]:
+    """Tokens of a title or role phrase, reduced to comparable meaning."""
+    out: set[str] = set()
+    for word in normalize_title(text).split():
+        if len(word) < 2:
+            continue
+        word = ROLE_STEMS.get(word, word)
+        if word in ROLE_STOPWORDS:
+            continue
+        out.add(ROLE_SYNONYMS.get(word, word))
+    return frozenset(out)
+
+
+def role_anchors(role: str | None) -> frozenset[str]:
+    """The domain words a title must contain to count as this role at all."""
+    tokens = role_tokens(role)
+    specific = tokens - GENERIC_ROLE_WORDS
+    return specific or tokens
+
+
+def role_affinity(title: str | None, role: str | None) -> float:
+    """How well ``title`` matches the target ``role``, 0..1.
+
+    Recall-led on purpose: the question is how much of the role the title
+    covers, not how similar the two strings are. Dividing by the longer string
+    -- which is what a symmetric ratio does -- punishes a title for naming the
+    team, the term and the requisition alongside the role, so
+    "Silicon Design Engineering Intern/Co-Op" scored 0.33 against
+    "Hardware Engineer Intern" despite being exactly that job.
+
+    Two guards keep recall from over-firing. The role's domain word must
+    actually appear, and a title belonging to another discipline scores zero
+    however many generic words it shares.
+    """
+    title_set, role_set = role_tokens(title), role_tokens(role)
+    if not title_set or not role_set:
+        return 0.0
+    if title_set & FOREIGN_DISCIPLINES:
+        return 0.0
+    anchors = role_anchors(role)
+    if anchors and not (title_set & anchors):
+        return 0.0
+
+    hit = title_set & role_set
+    # Recall is weighted by how much each role word actually identifies the
+    # role. Counting words equally made "FPGA Design Intern" score 0.44
+    # against "FPGA Engineer Intern" -- half marks for missing the word
+    # "engineer", which distinguishes nothing, while matching "FPGA", which
+    # distinguishes everything.
+    def weight(token: str) -> float:
+        return 0.35 if token in GENERIC_ROLE_WORDS else 1.0
+
+    role_mass = sum(weight(t) for t in role_set)
+    recall = sum(weight(t) for t in hit) / role_mass if role_mass else 0.0
+    precision = len(hit) / len(title_set)
+    # Recall decides; precision only softens a title that is mostly about
+    # something else, so a long but on-topic title is not penalised for length.
+    return recall * (0.75 + 0.25 * precision)
 
 
 def discriminators(*texts: str | None) -> frozenset[str]:

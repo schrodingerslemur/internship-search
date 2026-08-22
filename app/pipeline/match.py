@@ -26,7 +26,7 @@ from app.models.base import (
     SponsorshipStatus,
     utcnow,
 )
-from app.pipeline.textutil import normalize_text, slugify_company, token_set_ratio
+from app.pipeline.textutil import normalize_text, role_affinity, slugify_company
 from app.schemas.job import NormalizedJob
 from app.schemas.preferences import SearchPreferences
 from app.schemas.profile import CandidateProfileData
@@ -34,17 +34,30 @@ from app.schemas.profile import CandidateProfileData
 
 @dataclass
 class ComponentScore:
-    """One scoring component: a 0-100 value plus its rationale."""
+    """One scoring component: a 0-100 value plus its rationale.
+
+    ``value`` may be ``None``, meaning *this could not be measured* -- the
+    posting carried no evidence either way. That is different from zero, and
+    keeping the two apart is what stops a missing description from voting.
+    A component with no value is dropped from the blend and its weight is
+    shared out among the components that did measure something.
+    """
 
     name: str
-    value: float
+    value: float | None
     weight: float
     reasons: list[str] = field(default_factory=list)
     concerns: list[str] = field(default_factory=list)
+    #: Which configured role this component matched, when it matched one.
+    matched_role: str | None = None
+
+    @property
+    def measured(self) -> bool:
+        return self.value is not None
 
     @property
     def weighted(self) -> float:
-        return self.value * self.weight
+        return (self.value or 0.0) * self.weight
 
 
 @dataclass
@@ -60,14 +73,28 @@ class MatchResult:
     excluded: bool = False
     exclusion_reason: str | None = None
 
+    #: What each component actually contributed to the final score, after
+    #: weight renormalisation and the context multiplier. Populated by
+    #: ``score_job`` so the UI can explain the number it is showing instead of
+    #: listing raw component values that do not add up to it.
+    contributions: dict[str, float] = field(default_factory=dict)
+    #: The configured role this job's title matched, if any.
+    matched_role: str | None = None
+
     def breakdown(self) -> dict[str, dict[str, object]]:
         return {
             name: {
-                "value": round(component.value, 1),
+                # None means "could not be measured", and survives to the UI as
+                # such. A component that did not measure anything must not be
+                # rendered as a zero bar -- that reads as a bad score.
+                "value": None if component.value is None else round(component.value, 1),
+                "measured": component.measured,
                 "weight": round(component.weight, 3),
                 "weighted": round(component.weighted, 2),
+                "contribution": round(self.contributions.get(name, 0.0), 2),
                 "reasons": component.reasons,
                 "concerns": component.concerns,
+                "matched_role": component.matched_role,
             }
             for name, component in self.components.items()
         }
@@ -91,28 +118,39 @@ def score_role_match(job: NormalizedJob, prefs: SearchPreferences) -> ComponentS
         component.reasons.append("No target roles configured")
         return component
 
-    best_ratio = 0.0
+    # Ties are broken by the *unweighted* affinity first, so the role named in
+    # the explanation is the one the title actually resembles. Ranking by the
+    # weighted figure alone let a role win a tie it had not earned and then be
+    # reported as the reason, which is how "Hardware Engineering Intern" came
+    # to be explained as a match for "ML Hardware Intern".
+    best_affinity = 0.0
+    best_adjusted = 0.0
     best_role = None
     for role in roles:
-        ratio = token_set_ratio(job.title, role.name)
+        affinity = role_affinity(job.title, role.name)
+        if affinity <= 0:
+            continue
         # Role weight nudges ties without letting a low-weight role win outright.
-        adjusted = ratio * (0.85 + 0.15 * min(role.weight, 2.0))
-        if adjusted > best_ratio:
-            best_ratio, best_role = adjusted, role
+        adjusted = affinity * (0.85 + 0.15 * min(role.weight, 2.0))
+        if (adjusted, affinity) > (best_adjusted, best_affinity):
+            best_affinity, best_adjusted, best_role = affinity, adjusted, role
 
-    value = _clamp(best_ratio * 100)
+    value = _clamp(best_adjusted * 100)
 
     # A title that is clearly an internship in a relevant domain still scores
-    # even when no configured role phrase lines up exactly.
-    if value < 40:
+    # even when no configured role phrase lines up exactly. Restricted to
+    # titles that named a skill *and* were not rejected outright, so a job in
+    # another discipline cannot collect the floor.
+    if 0 < value < 40 or (value == 0 and best_role is not None):
         title_low = normalize_text(job.title)
         domain_hits = [s for s in job.skills if s.lower() in title_low]
         if domain_hits:
             value = max(value, 45.0)
             component.reasons.append(f"Title mentions {', '.join(domain_hits[:3])}")
 
-    if best_role and best_ratio > 0.3:
+    if best_role is not None and best_affinity > 0.3:
         component.reasons.append(f"Matches target role: {best_role.name}")
+        component.matched_role = best_role.name
     elif value < 30:
         component.concerns.append("Title does not match your target roles")
 
@@ -120,27 +158,90 @@ def score_role_match(job: NormalizedJob, prefs: SearchPreferences) -> ComponentS
     return component
 
 
+#: Skills so widely required that holding one says almost nothing about fit.
+#: They still count -- a posting wanting Python and you knowing Python is real
+#: evidence -- but a specialist skill is worth roughly three of them.
+UBIQUITOUS_SKILLS: frozenset[str] = frozenset(
+    {
+        "python", "java", "javascript", "typescript", "git", "linux", "bash",
+        "sql", "docker", "aws", "gcp", "azure", "c", "c++", "react", "node.js",
+        "ci/cd", "jenkins", "kubernetes", "numpy", "pandas",
+    }
+)
+
+#: Evidence needed for a full skills score, in weighted skill-hits. Three
+#: specialist matches -- or the equivalent in common ones -- is a strong
+#: signal; beyond that the component saturates rather than continuing to
+#: reward postings for listing more technologies.
+SKILL_EVIDENCE_TARGET = 3.0
+
+
+#: Body text below this length is a stub -- a title and a link, not a posting.
+#: The real corpus is starkly bimodal on this: of 5,134 listings, 2,625 carry
+#: exactly zero body characters and 2,474 carry over a thousand, with nine in
+#: between. So the threshold only has to answer "was a body fetched at all",
+#: and is deliberately low: a genuinely terse but real description is evidence,
+#: and should be read rather than discarded.
+MIN_READABLE_BODY_CHARS = 40
+
+
+def _has_readable_body(job: NormalizedJob) -> bool:
+    """Whether this posting carries enough prose to draw conclusions from."""
+    body = " ".join(
+        part
+        for part in (
+            job.description,
+            job.requirements,
+            job.responsibilities,
+            job.preferred_qualifications,
+        )
+        if part
+    )
+    return len(body.strip()) >= MIN_READABLE_BODY_CHARS
+
+
+def _skill_weight(skill: str) -> float:
+    return 0.35 if normalize_text(skill) in UBIQUITOUS_SKILLS else 1.0
+
+
 def score_skills(
     job: NormalizedJob, prefs: SearchPreferences, profile: CandidateProfileData
 ) -> ComponentScore:
-    """Overlap between the posting's skills and the candidate's skills."""
-    component = ComponentScore("technical_skills", 0.0, 0.0)
-    candidate_skills = {normalize_text(s) for s in profile.all_skills() if s}
-    job_skills = {normalize_text(s) for s in job.skills if s}
+    """Overlap between the posting's skills and the candidate's skills.
+
+    Scored on the *absolute weight of evidence found*, not on the fraction of
+    the posting's skill list that was covered. Dividing by the posting's own
+    list punished thorough postings: one naming eighteen technologies needed
+    twelve matches to score well, while one mentioning "Python" once needed a
+    single match and scored 100. That inverted the ranking -- a biotech firm's
+    lone Python reference outscored a trading firm's FPGA/RTL/SystemVerilog
+    posting for a hardware candidate.
+    """
+    component = ComponentScore("technical_skills", None, 0.0)
+    candidate_skills = _candidate_skill_set(profile)
+    job_skills = [s for s in job.skills if s]
 
     if not candidate_skills:
-        component.value = 50.0
-        component.reasons.append("No skills in profile to compare")
-        return component
-    if not job_skills:
-        # No skills detected in the posting is missing evidence, not a negative.
-        component.value = 45.0
-        component.concerns.append("No recognisable skills found in the posting")
+        component.concerns.append("No skills in your profile to compare against")
         return component
 
-    matched = sorted(candidate_skills & job_skills)
-    coverage = len(matched) / max(1, min(len(job_skills), 12))
-    value = _clamp(coverage * 100)
+    # Skills are extracted from the title as well as the body, so a posting
+    # with no description can still carry a token or two from its own name.
+    # That is not enough to conclude anything: "no overlap" with a title-only
+    # skill list is missing evidence, not a poor match, and scoring it zero
+    # put a hard zero on a quarter of the score for exactly the postings the
+    # crawler failed to fetch. Both cases leave the value unset, which drops
+    # the component from the blend rather than letting it vote.
+    if not _has_readable_body(job):
+        component.concerns.append("Posting has no description, so skills could not be compared")
+        return component
+    if not job_skills:
+        component.concerns.append("No recognisable skills in the posting")
+        return component
+
+    matched = sorted({normalize_text(s) for s in job_skills} & candidate_skills)
+    evidence = sum(_skill_weight(s) for s in matched)
+    value = _clamp(100.0 * min(1.0, evidence / SKILL_EVIDENCE_TARGET))
 
     # Positive keywords appearing anywhere in the posting add signal.
     blob = normalize_text(job.text_blob())
@@ -162,16 +263,44 @@ def score_skills(
     return component
 
 
+def _candidate_skill_set(profile: CandidateProfileData) -> set[str]:
+    """The candidate's skills, read through the same vocabulary as a posting's.
+
+    A profile is free text, so a raw string intersection missed real matches:
+    "Python programming" never equalled the token ``python``. Running the
+    profile through the same extractor the postings go through puts both sides
+    in one vocabulary, and the raw entries are kept too so a skill outside the
+    vocabulary is not silently lost.
+    """
+    from app.pipeline.normalize import extract_skills
+
+    raw = [s for s in profile.all_skills() if s]
+    if not raw:
+        return set()
+    skills = {normalize_text(s) for s in raw}
+    skills.update(normalize_text(s) for s in extract_skills(" , ".join(raw)))
+    return {s for s in skills if s}
+
+
 def score_candidate_fit(
     job: NormalizedJob, prefs: SearchPreferences, profile: CandidateProfileData
 ) -> ComponentScore:
-    """Eligibility: experience, degree, graduation timing, GPA."""
-    component = ComponentScore("candidate_fit", 70.0, 0.0)
+    """Eligibility: experience, degree, graduation timing, GPA.
+
+    Returns *unmeasured* when the posting states no requirement at all, which
+    is the common case. Previously this returned a flat 70-75 for essentially
+    every job -- p10, p50 and p90 were all 75.0 across the corpus -- so it
+    carried 15% of the weight while distinguishing nothing, pulling every job
+    toward the middle and compressing the range the thresholds work over.
+    """
+    component = ComponentScore("candidate_fit", None, 0.0)
     constraints = prefs.constraints
     value = 70.0
+    stated = False
 
     years = job.experience_required_years
     if years is not None:
+        stated = True
         if years <= constraints.max_experience_years:
             value += 15
             component.reasons.append(f"Experience requirement is {years:g} years")
@@ -179,11 +308,10 @@ def score_candidate_fit(
             penalty = min(50.0, (years - constraints.max_experience_years) * 12)
             value -= penalty
             component.concerns.append(f"Requires {years:g}+ years of experience")
-    else:
-        value += 5  # No stated requirement is mildly favourable for an intern.
 
     degrees = {d.lower() for d in job.degree_requirements}
     if degrees:
+        stated = True
         if "phd" in degrees and profile.degree and "phd" not in profile.degree.lower():
             if not ({"bachelors", "masters"} & degrees):
                 value -= 30
@@ -196,7 +324,12 @@ def score_candidate_fit(
             component.reasons.append("Open to Bachelors students")
 
     if constraints.min_gpa and profile.gpa and profile.gpa < constraints.min_gpa:
+        stated = True
         component.concerns.append("GPA below your configured minimum")
+
+    if not stated:
+        component.concerns.append("Posting states no experience or degree requirement")
+        return component
 
     component.value = _clamp(value)
     return component
@@ -399,7 +532,12 @@ RELEVANCE_COMPONENTS: tuple[str, ...] = ("role_match", "technical_skills")
 #: adding to it. Adding it produced a floor of roughly 32 points on every job,
 #: including ones with no role or skill match at all, which squeezed the entire
 #: corpus into 30-60 and made an absolute score threshold meaningless.
-CONTEXT_FLOOR = 0.55
+#:
+#: Raised from 0.55: at that floor a *perfect* relevance in average context
+#: scored 77.5, below the default strong-match threshold of 80, so nothing in a
+#: 5,000-job corpus could reach the top two bands. Context should modulate a
+#: relevant job, not halve it.
+CONTEXT_FLOOR = 0.70
 
 
 def _blend(components: dict[str, ComponentScore], weights: dict[str, float]) -> float:
@@ -408,32 +546,100 @@ def _blend(components: dict[str, ComponentScore], weights: dict[str, float]) -> 
     A perfect role and skill match in mediocre context still scores well. A job
     that matches neither cannot be rescued by being nearby, recent and an
     internship -- which is exactly what the previous additive blend allowed.
+
+    Only components that actually measured something take part. An unmeasured
+    component's weight is shared out among the rest of its group rather than
+    voting with an invented midpoint: half of all postings arrive with no
+    description, and treating that silence as a mediocre skill match let the
+    crawler's luck outweigh the candidate's fit.
     """
-    relevance_weight = sum(weights.get(name, 0.0) for name in RELEVANCE_COMPONENTS)
+    measured = {name: c for name, c in components.items() if c.measured}
+
+    relevance_weight = sum(
+        weights.get(name, 0.0) for name in RELEVANCE_COMPONENTS if name in measured
+    )
     context_weight = sum(
-        weight for name, weight in weights.items() if name not in RELEVANCE_COMPONENTS
+        weights.get(name, 0.0)
+        for name in measured
+        if name not in RELEVANCE_COMPONENTS
     )
 
     if relevance_weight <= 0:
-        # The user has weighted relevance out entirely; respect that literally.
-        return sum(component.weighted for component in components.values())
+        # Either the user weighted relevance out entirely, or nothing about
+        # relevance could be measured. Respect that literally and fall back to
+        # a plain weighted average of whatever else is known.
+        if context_weight <= 0:
+            return 0.0
+        return (
+            sum(
+                c.weighted
+                for name, c in measured.items()
+                if name not in RELEVANCE_COMPONENTS
+            )
+            / context_weight
+        )
 
     relevance = (
-        sum(components[name].weighted for name in RELEVANCE_COMPONENTS if name in components)
+        sum(measured[name].weighted for name in RELEVANCE_COMPONENTS if name in measured)
         / relevance_weight
     )
     if context_weight <= 0:
         return relevance
 
     context = (
-        sum(
-            component.weighted
-            for name, component in components.items()
-            if name not in RELEVANCE_COMPONENTS
-        )
+        sum(c.weighted for name, c in measured.items() if name not in RELEVANCE_COMPONENTS)
         / context_weight
     )
     return relevance * (CONTEXT_FLOOR + (1.0 - CONTEXT_FLOOR) * (context / 100.0))
+
+
+def _contributions(
+    components: dict[str, ComponentScore], weights: dict[str, float], total: float
+) -> dict[str, float]:
+    """How many of the final points each component is responsible for.
+
+    The blend is multiplicative, so a component's weighted value is not its
+    contribution -- there is no arrangement of the raw numbers that adds up to
+    the score. Apportioning the total by each component's share of its own
+    group gives a figure that does sum correctly and can be shown to the user.
+    """
+    measured = {name: c for name, c in components.items() if c.measured}
+    if not measured or total <= 0:
+        return {}
+
+    rel_weight = sum(weights.get(n, 0.0) for n in RELEVANCE_COMPONENTS if n in measured)
+    ctx_weight = sum(
+        weights.get(n, 0.0) for n in measured if n not in RELEVANCE_COMPONENTS
+    )
+    rel_total = sum(measured[n].weighted for n in RELEVANCE_COMPONENTS if n in measured)
+    ctx_total = sum(
+        c.weighted for n, c in measured.items() if n not in RELEVANCE_COMPONENTS
+    )
+
+    # Relevance sets the ceiling; context scales it. Split the final score
+    # between the two groups in that proportion, then within each group by
+    # each component's share of the group's weighted value.
+    if rel_weight <= 0:
+        rel_share, ctx_share = 0.0, total
+    elif ctx_weight <= 0:
+        rel_share, ctx_share = total, 0.0
+    else:
+        context = ctx_total / ctx_weight
+        lift = (1.0 - CONTEXT_FLOOR) * (context / 100.0)
+        ctx_fraction = lift / (CONTEXT_FLOOR + lift) if (CONTEXT_FLOOR + lift) else 0.0
+        ctx_share = total * ctx_fraction
+        rel_share = total - ctx_share
+
+    out: dict[str, float] = {}
+    for name, component in measured.items():
+        in_relevance = name in RELEVANCE_COMPONENTS
+        group_total = rel_total if in_relevance else ctx_total
+        group_share = rel_share if in_relevance else ctx_share
+        if group_total > 0:
+            out[name] = group_share * (component.weighted / group_total)
+        else:
+            out[name] = 0.0
+    return out
 
 
 def score_job(
@@ -497,7 +703,7 @@ def score_job(
     if negative_hits:
         concerns.append(f"Negative keywords: {', '.join(negative_hits[:4])}")
 
-    candidate_skills = {normalize_text(s) for s in profile.all_skills() if s}
+    candidate_skills = _candidate_skill_set(profile)
     job_skills = [s for s in job.skills]
     matched_skills = [s for s in job_skills if normalize_text(s) in candidate_skills]
     missing_skills = [s for s in job_skills if normalize_text(s) not in candidate_skills][:10]
@@ -518,4 +724,6 @@ def score_job(
         missing_requirements=missing_requirements,
         matched_skills=matched_skills,
         missing_skills=missing_skills,
+        contributions=_contributions(components, weights, score),
+        matched_role=components["role_match"].matched_role,
     )

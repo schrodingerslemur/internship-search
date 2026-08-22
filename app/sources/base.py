@@ -203,6 +203,10 @@ class BoardJobSource(JobSource):
         attempted = succeeded = 0
         failures: list[str] = []
         speculative_failures = 0
+        # How many listings each registered board actually returned. Without
+        # this a board that has quietly stopped yielding is indistinguishable
+        # from a healthy one -- both simply report "succeeded".
+        board_yield: dict[int, int] = {}
 
         for board, item in zip(boards, results, strict=False):
             is_speculative = bool(board.get("speculative"))
@@ -218,6 +222,8 @@ class BoardJobSource(JobSource):
 
             if not is_speculative:
                 succeeded += 1
+            if board.get("id"):
+                board_yield[int(board["id"])] = len(item)
             jobs.extend(item)
 
         # Logged at warning, not debug: without a reason here, a failed crawl
@@ -238,16 +244,19 @@ class BoardJobSource(JobSource):
             )
 
         self._last_board_stats = (attempted, succeeded)
+        self._last_board_yield = board_yield
         if attempted and succeeded == 0:
             raise FetchError(f"all {attempted} registered boards failed: {failures[0]}")
         return jobs
 
     async def run(self, ctx: SourceContext) -> SourceOutcome:
         self._last_board_stats = (0, 0)
+        self._last_board_yield = {}
         outcome = await super().run(ctx)
         attempted, successful = getattr(self, "_last_board_stats", (0, 0))
         outcome.sub_targets_attempted = attempted
         outcome.sub_targets_successful = successful
+        outcome.board_yield = dict(getattr(self, "_last_board_yield", {}) or {})
         if attempted and successful < attempted and outcome.status == "ok":
             outcome.status = "degraded"
             outcome.error = f"{successful}/{attempted} boards succeeded"

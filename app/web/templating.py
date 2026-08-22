@@ -171,10 +171,18 @@ def score_class(score: float | None) -> str:
     return "score-low"
 
 
+def truncate_text(value: str | None, limit: int = 190) -> str:
+    """A short, single-line preview of a posting, cut on a word boundary."""
+    from app.pipeline.textutil import truncate
+
+    return truncate(value, limit)
+
+
 templates.env.filters["timeago"] = timeago
 templates.env.filters["salary"] = salary_text
 templates.env.filters["humanize"] = humanize
 templates.env.filters["score_class"] = score_class
+templates.env.filters["truncate_text"] = truncate_text
 templates.env.filters["when"] = when_text
 templates.env.globals["deadline_badge"] = deadline_badge
 templates.env.globals["status_meta"] = status_meta

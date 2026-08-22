@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import session_scope
 from app.logging_setup import get_logger
-from app.models import AtsBoard, Job, JobSourceRecord, SearchRun, SearchRunSource
+from app.models import AtsBoard, JobSourceRecord, SearchRun, SearchRunSource
 from app.models.base import NotificationKind, Priority, RunStatus, SourceHealth, utcnow
 from app.pipeline import discovery
 from app.pipeline.dedupe import DedupResult, deduplicate
@@ -274,7 +274,10 @@ async def run_search(
         report.boards_discovered = discovery.register_boards(session, harvested)
 
         failed_board_ids = _failed_board_ids(outcomes, boards)
-        discovery.record_board_results(session, boards, failed_board_ids)
+        board_yield: dict[int, int] = {}
+        for outcome in outcomes:
+            board_yield.update(outcome.board_yield or {})
+        discovery.record_board_results(session, boards, failed_board_ids, board_yield)
         discovery.prune_failed_boards(session)
 
         persisted = persist_clusters(
@@ -314,25 +317,23 @@ async def run_search(
             # thresholds and sent to its own address. A failure for one user
             # must not cost everybody else their digest.
             users = all_active_users(session)
-            touched_ids = list(
-                dict.fromkeys(report.new_job_ids + report.updated_job_ids)
-            )
-            touched = (
-                session.scalars(select(Job).where(Job.id.in_(touched_ids))).all()
-                if touched_ids
-                else []
-            )
 
             for user in users:
                 prefs_now = load_preferences(session, user=user)
-                # Score this run's jobs against *this* account before deciding
-                # what to send: the same posting is a different prospect for
-                # two people with different profiles.
+                # Score against *this* account before deciding what to send:
+                # the same posting is a different prospect for two people with
+                # different profiles.
+                #
+                # The whole active corpus, not just this run's jobs. Freshness
+                # decays with the calendar while a stored score does not, so
+                # scoring only what the crawl touched left everything else
+                # carrying the staleness penalty it had when it was found --
+                # across the corpus that component's median had decayed to
+                # zero. Re-scoring is pure CPU over rows already in memory.
                 try:
-                    user_jobs.score_jobs_for_user(
+                    user_jobs.rescore_all_for_user(
                         session,
                         user,
-                        list(touched),
                         prefs_now,
                         load_profile(session, user=user),
                         now=utcnow(),

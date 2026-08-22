@@ -40,7 +40,7 @@ def _job_page_context(request: Request, db: Session, user: User, view_name: str)
         "page": page,
         "view": user_jobs.view_for(db, user, page.jobs),
         "filters": filters,
-        "facets": q.facet_values(db),
+        "facets": q.facet_values(db, user=user),
         "runs": q.recent_runs(db, limit=1),
         "next_search_at": _next_search_at(request),
         "flash": _flash(request),
@@ -435,6 +435,9 @@ def coverage(
             "records": records,
             "discovery": discovery_summary(db),
             "yields": q.source_yield_stats(db),
+            "preferred_coverage": q.preferred_company_coverage(
+                db, load_preferences(db, user=user).companies.preferred
+            ),
             "counts": q.dashboard_counts(db, user),
         },
     )
@@ -485,6 +488,7 @@ def settings_page(
             "digest_email": user.notification_email,
             "counts": q.dashboard_counts(db, user),
             "saved": request.query_params.get("saved") == "1",
+            "rescored": request.query_params.get("rescored"),
             # `error` means the settings did not save. A delivery test that
             # fails is a `notice`: the settings saved fine, the send did not.
             "error": request.query_params.get("error"),
@@ -651,17 +655,29 @@ async def settings_save(
         },
     )
 
-    # Refuse to select a channel that cannot actually deliver. Saving it
-    # anyway is how you end up believing digests are being sent when every
-    # one of them is quietly falling back to a file.
+    # Refuse to *enable* a channel that cannot actually deliver. Turning it on
+    # anyway is how you end up believing digests are being sent when every one
+    # of them is quietly falling back to a file.
+    #
+    # Refusing the channel must not refuse the rest of the page. This used to
+    # roll the whole transaction back, so an unconfigured notification channel
+    # silently discarded every other change on the form -- roles, weights,
+    # locations, thresholds. On an instance with no bot token that meant no
+    # settings change ever persisted, and the only clue was an error naming
+    # the channel: deleting a target role appeared to do nothing at all,
+    # because the delete really was being thrown away.
     channel = notify_config.load(db)
     chosen = validated.notifications.provider
+    channel_warning: str | None = None
     if validated.notifications.enabled and not channel.ready_for(chosen):
         missing = ", ".join(channel.missing_for(chosen))
-        db.rollback()
-        return RedirectResponse(
-            f"/settings?error={quote(f'{chosen} still needs: {missing}')}", status_code=303
+        channel_warning = (
+            f"Everything else was saved, but digests stay off: {chosen} still "
+            f"needs {missing}."
         )
+        # Keep the user's chosen provider so their setup is not undone; just
+        # do not claim to be sending anything through it.
+        validated.notifications.enabled = False
 
     if form.get("digest_email") is not None:
         user.digest_email = str(form.get("digest_email")).strip() or None
@@ -680,6 +696,11 @@ async def settings_save(
         save_profile(db, CandidateProfileData.model_validate(profile_data), user=user)
 
     save_preferences(db, validated, user=user)
+
+    # Preferences that changed the ranking must reach the jobs already stored,
+    # or the setting looks ignored: removing a target role would leave every
+    # posting for it sitting at the top of the feed with its old score.
+    rescored = user_jobs.rescore_all_for_user(db, user, validated)
     db.commit()
 
     # Reschedule so time/cadence changes take effect without a restart.
@@ -689,7 +710,10 @@ async def settings_save(
 
         reschedule(scheduler, validated.schedule)
 
-    return RedirectResponse("/settings?saved=1", status_code=303)
+    target = f"/settings?saved=1&rescored={rescored}"
+    if channel_warning:
+        target += f"&notice={quote(channel_warning)}&notice_bad=1"
+    return RedirectResponse(target, status_code=303)
 
 
 @router.get("/profile", response_class=HTMLResponse)
@@ -705,6 +729,7 @@ def profile_page(
             "profile": load_profile(db, user=user),
             "resumes": list_resumes(db, user),
             "saved": request.query_params.get("saved") == "1",
+            "rescored": request.query_params.get("rescored"),
             "counts": q.dashboard_counts(db, user),
         },
     )
@@ -756,9 +781,13 @@ async def profile_save(
 
     from app.schemas.profile import CandidateProfileData
 
-    save_profile(db, CandidateProfileData.model_validate(data), user=user)
+    updated = CandidateProfileData.model_validate(data)
+    save_profile(db, updated, user=user)
+    # Your skills are half of the relevance score, so editing them has to reach
+    # the stored jobs for the same reason a preference change does.
+    rescored = user_jobs.rescore_all_for_user(db, user, None, updated)
     db.commit()
-    return RedirectResponse("/profile?saved=1", status_code=303)
+    return RedirectResponse(f"/profile?saved=1&rescored={rescored}", status_code=303)
 
 
 @router.post("/resumes")

@@ -193,10 +193,19 @@ def select_boards_to_crawl(session: Session, limit: int) -> list[dict]:
 
 
 def record_board_results(
-    session: Session, boards: list[dict], failed: set[int]
+    session: Session, boards: list[dict], failed: set[int],
+    yields: dict[int, int] | None = None,
 ) -> None:
-    """Update crawl bookkeeping for the boards attempted this run."""
+    """Update crawl bookkeeping for the boards attempted this run.
+
+    ``yields`` maps board id to the number of listings it returned. Recording
+    it is what makes a board that has quietly stopped producing visible: a
+    board whose token has gone stale still answers, still counts as a success,
+    and returns nothing -- which reads identically to a healthy board on every
+    other field.
+    """
     now = utcnow()
+    counts = yields or {}
     ids = [b["id"] for b in boards if b.get("id")]
     if not ids:
         return
@@ -208,6 +217,10 @@ def record_board_results(
         else:
             row.consecutive_failures = 0
             row.last_success_at = now
+        if row.id in counts:
+            found = int(counts[row.id])
+            row.jobs_last_crawl = found
+            row.relevant_jobs_total = (row.relevant_jobs_total or 0) + found
     session.flush()
 
 

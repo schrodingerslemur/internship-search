@@ -4,7 +4,9 @@
 <h1>Candidate profile</h1>
 <div class="sub">Used to score every job. The more accurate this is, the better the ranking.</div>
 
-{% if saved %}<div class="note">Saved.</div>{% endif %}
+{% if saved %}<div class="note">Saved.{% if rescored %}
+  Re-ranked {{ rescored }} job{{ '' if rescored == '1' else 's' }} against your updated profile &mdash;
+  <a href="/">see the feed</a>.{% endif %}</div>{% endif %}
 
 <form method="post" action="/profile">
 <h2>Education</h2>

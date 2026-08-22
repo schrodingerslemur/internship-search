@@ -14,7 +14,9 @@
 <h1>Settings</h1>
 <div class="sub">What we look for, and when we tell you about it.</div>
 
-{% if saved %}<div class="flash ok">Preferences updated.</div>{% endif %}
+{% if saved %}<div class="flash ok">Preferences updated.{% if rescored %}
+  Re-ranked {{ rescored }} job{{ '' if rescored == '1' else 's' }} against your new settings &mdash;
+  <a href="/">see the feed</a>.{% endif %}</div>{% endif %}
 {% if error %}<div class="flash bad">Could not save: {{ error }}</div>{% endif %}
 {% if notice %}<div class="flash {{ 'bad' if notice_bad else 'ok' }}">{{ notice }}</div>{% endif %}
 

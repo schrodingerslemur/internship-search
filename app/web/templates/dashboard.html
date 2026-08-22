@@ -92,10 +92,16 @@
           <option value="{{ d }}" {% if filters.posted_within_days==d %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
+      {# Options carry their live counts. Offering "90+ match" when one job in
+         five thousand clears it is a filter that returns an empty page and
+         gives no hint why. #}
       <select name="min_score" aria-label="Minimum match">
         <option value="">Any match score</option>
         {% for d in [60,70,80,90] %}
-          <option value="{{ d }}" {% if filters.min_score==d %}selected{% endif %}>{{ d }}+ match</option>
+          {% set n = (facets.score_counts or {}).get(d) %}
+          <option value="{{ d }}" {% if filters.min_score==d %}selected{% endif %}
+                  {% if n == 0 %}disabled{% endif %}>
+            {{ d }}+ match{% if n is not none %} ({{ n }}){% endif %}</option>
         {% endfor %}
       </select>
       <label class="inline-check">

@@ -286,6 +286,39 @@ def deduplicate(
                     )
                 )
 
+    # ---- Stage 3b: identical content (guarded) ----
+    # Same company, title, location and body text. Distinct from the
+    # fingerprint stage, which ignores the description: a listing that arrives
+    # from an aggregator as a bare title with no body shares a fingerprint with
+    # every other opening of that name, but shares a *content hash* only with
+    # the posting it is actually a copy of.
+    #
+    # The guard does the important work here. Employers routinely advertise
+    # many separate requisitions under one boilerplate description -- eleven
+    # "Graduate Engineer Trainee" openings with identical text and eleven
+    # distinct requisition IDs -- and those are real, separate jobs. Merging
+    # them on text alone would silently delete ten of them.
+    content_buckets: dict[str, list[int]] = {}
+    for idx, job in enumerate(items):
+        if job.content_hash:
+            content_buckets.setdefault(job.content_hash, []).append(idx)
+    for _, idxs in content_buckets.items():
+        if len(idxs) < 2:
+            continue
+        head = idxs[0]
+        for other in idxs[1:]:
+            if uf.find(head) == uf.find(other):
+                continue
+            allowed, reason = merge_guard(items[head], items[other])
+            if allowed:
+                link(head, other, "content_hash", 0.97, "identical content")
+            else:
+                records.append(
+                    MergeRecord(
+                        items[head].key, items[other].key, "content_hash", "different", 0.0, reason
+                    )
+                )
+
     # ---- Stage 4/5: similarity within company blocks (guarded) ----
     company_blocks: dict[str, list[int]] = {}
     for idx, job in enumerate(items):

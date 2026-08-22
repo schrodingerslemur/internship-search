@@ -108,14 +108,49 @@
       </div>
       {% set pm = priority_meta(v.priority if v else job.priority) %}
       <div style="margin:6px 0 12px">{{ pm.emoji }} {{ pm.label }}</div>
-      {% for name, comp in (job.score_breakdown or {}).items() %}
-        <div style="margin-bottom:7px">
-          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted)">
-            <span>{{ name|humanize }}</span><span>{{ comp.value }}</span>
+
+      {# Contribution, not raw value. The blend is multiplicative, so there is
+         no arrangement of the component values that adds up to the score --
+         showing them alone left the panel unable to explain the number beside
+         it. A component that could not be measured says so rather than
+         rendering an empty bar, which reads as a bad score. #}
+      {% set bd = (v.breakdown if v and v.breakdown else job.score_breakdown) or {} %}
+      {% set unmeasured = [] %}
+      {% for name, comp in bd.items() %}
+        {% if comp.get('measured', true) %}
+          <div class="comp">
+            <div class="comp-h">
+              <span>{{ name|humanize }}</span>
+              {# A breakdown stored before contributions were recorded has no
+                 such key, so ask for it rather than assuming it is there. #}
+              {% set contribution = comp.get('contribution') %}
+              <span class="comp-v">{{ (comp.value or 0)|round|int }}
+                {%- if contribution %}
+                  <em>&rarr; +{{ contribution|round(1) }}</em>
+                {%- endif %}</span>
+            </div>
+            <div class="bar"><i style="width:{{ comp.value }}%"></i></div>
           </div>
-          <div class="bar"><i style="width:{{ comp.value }}%"></i></div>
-        </div>
+        {% else %}
+          {% set _ = unmeasured.append(name) %}
+        {% endif %}
       {% endfor %}
+
+      {% if unmeasured %}
+        <div class="comp">
+          <div class="comp-h">
+            <span>{{ unmeasured|map('humanize')|join(', ') }}</span>
+            <span class="comp-v dim">not stated</span>
+          </div>
+          <div class="bar unmeasured"><i style="width:100%"></i></div>
+        </div>
+        <div class="help" style="margin-top:8px">
+          This posting says nothing we could measure here, so
+          {{ 'these were' if unmeasured|length > 1 else 'it was' }} left out of
+          the score rather than guessed at. The weight went to the parts that
+          could be measured.
+        </div>
+      {% endif %}
     </div>
 
     <div class="panel" style="margin-bottom:14px">
@@ -124,13 +159,15 @@
       {% if reasons %}
         <ul class="clean">{% for r in reasons %}<li>✓ {{ r }}</li>{% endfor %}</ul>
       {% else %}<p class="sub">No specific reasons recorded.</p>{% endif %}
-      {% if job.concerns %}
+      {% set concerns = (v.concerns if v and v.concerns else job.concerns) or [] %}
+      {% if concerns %}
         <h3 style="margin-top:14px">Why you might skip</h3>
-        <ul class="clean">{% for c in job.concerns %}<li>⚠ {{ c }}</li>{% endfor %}</ul>
+        <ul class="clean">{% for c in concerns %}<li>⚠ {{ c }}</li>{% endfor %}</ul>
       {% endif %}
-      {% if job.missing_requirements %}
+      {% set missing = (v.missing_requirements if v and v.missing_requirements else job.missing_requirements) or [] %}
+      {% if missing %}
         <h3 style="margin-top:14px">Missing requirements</h3>
-        <ul class="clean">{% for m in job.missing_requirements %}<li>✗ {{ m }}</li>{% endfor %}</ul>
+        <ul class="clean">{% for m in missing %}<li>✗ {{ m }}</li>{% endfor %}</ul>
       {% endif %}
     </div>
 
