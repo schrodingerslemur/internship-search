@@ -18,6 +18,24 @@ RECRUITEE_LIST = "https://{token}.recruitee.com/api/offers/"
 HYDRATE_LIMIT = 25
 
 
+def _first_text(value: Any) -> str | None:
+    """One department name, whatever shape the provider used to send it.
+
+    Workable reports ``department`` as a list -- sometimes empty, sometimes
+    with several names -- while the schema wants a single string. Passing the
+    list straight through raised a validation error inside ``make_job``, and
+    because that happens per posting it took down the *entire board*, then
+    every board, then the whole source. An optional label is not worth losing a
+    source over.
+    """
+    if isinstance(value, (list, tuple)):
+        value = next((v for v in value if v), None)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 class SmartRecruitersSource(BoardJobSource):
     name = "smartrecruiters"
     display_name = "SmartRecruiters"
@@ -125,7 +143,7 @@ class WorkableSource(BoardJobSource):
                     description=item.get("description") or "",
                     remote_status="remote" if item.get("remote") else None,
                     employment_type=item.get("employment_type"),
-                    department=item.get("department"),
+                    department=_first_text(item.get("department")),
                     date_posted=parse_date(item.get("published_on") or item.get("created_at")),
                     raw={"shortcode": shortcode, "board": token},
                 )

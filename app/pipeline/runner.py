@@ -192,6 +192,9 @@ async def run_search(
         session.flush()
         report.run_id = run.id
 
+        # Curated boards first, so one added in a release reaches an
+        # already-seeded database on the very next run.
+        discovery.seed_curated_boards(session)
         boards = discovery.select_boards_to_crawl(session, prefs.scope.max_ats_boards_per_run)
         # Seed plausible boards for preferred companies that have none yet.
         boards.extend(discovery.seed_boards_for_companies(session, prefs.companies.preferred))

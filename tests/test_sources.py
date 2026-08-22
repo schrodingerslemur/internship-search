@@ -10,6 +10,8 @@ from app.models.base import SourceKind
 from app.sources.ats.ashby import AshbySource
 from app.sources.ats.greenhouse import GreenhouseSource
 from app.sources.ats.lever import LeverSource
+from app.sources.ats.misc_ats import WorkableSource
+from app.sources.ats.phenom import PhenomSource
 from app.sources.ats.workday import WorkdaySource
 from app.sources.base import JobSource, SearchQuery, SourceContext
 from app.sources.http import FetchError, HttpClient
@@ -243,6 +245,167 @@ class TestWorkday:
     async def test_missing_host_metadata_fails_that_board_only(self, http):
         outcome = await WorkdaySource().run(
             ctx_for(http, boards=[{"provider": "workday", "board_token": "acme", "extra": {}}])
+        )
+        assert outcome.status == "failed"
+
+
+class TestWorkable:
+    LIST = "https://apply.workable.com/api/v1/accounts/acme/jobs"
+
+    def _row(self, **over):
+        row = {
+            "shortcode": "ABC123",
+            "title": "FPGA Design Intern",
+            "url": "https://apply.workable.com/acme/j/ABC123/",
+            "description": "Verilog work.",
+            "city": "Austin",
+            "state": "TX",
+            "country": "US",
+            "department": ["Silicon Engineering"],
+        }
+        row.update(over)
+        return row
+
+    @respx.mock
+    async def test_a_department_sent_as_a_list_does_not_sink_the_board(self, http):
+        """Workable reports ``department`` as a list. The schema wants a
+        string, and passing the list through raised inside make_job -- which
+        failed the posting, then the board, then every board, then the whole
+        source. An optional label must never cost a source."""
+        respx.post(self.LIST).mock(
+            return_value=httpx.Response(200, json={"results": [
+                self._row(),
+                self._row(shortcode="D4", title="RTL Intern", department=[]),
+                self._row(shortcode="D5", title="ASIC Intern", department="Hardware"),
+            ]})
+        )
+        outcome = await WorkableSource().run(
+            ctx_for(http, boards=[{"provider": "workable", "board_token": "acme"}])
+        )
+        assert outcome.status == "ok"
+        by_title = {j.title: j for j in outcome.jobs}
+        assert by_title["FPGA Design Intern"].department == "Silicon Engineering"
+        assert by_title["RTL Intern"].department is None
+        assert by_title["ASIC Intern"].department == "Hardware"
+
+    @respx.mock
+    async def test_the_first_named_department_wins(self, http):
+        respx.post(self.LIST).mock(
+            return_value=httpx.Response(200, json={"results": [
+                self._row(department=[None, "", "Verification", "Silicon"]),
+            ]})
+        )
+        outcome = await WorkableSource().run(
+            ctx_for(http, boards=[{"provider": "workable", "board_token": "acme"}])
+        )
+        assert outcome.jobs[0].department == "Verification"
+
+
+class TestPhenom:
+    """AMD is why this source exists: a preferred employer with 44 open
+    internships that reported exactly one, because it is not on Workday."""
+
+    HOST = "careers.amd.com"
+
+    def _row(self, req_id: str, title: str, **over):
+        data = {
+            "req_id": req_id,
+            "title": title,
+            "description": "<p>Design <strong>RTL</strong> in SystemVerilog.</p>",
+            "qualifications": "<li>Verilog</li>",
+            "full_location": "Austin, Texas",
+            "location_name": "US,TX,Austin",
+            "apply_url": f"https://careers-amd.icims.com/jobs/{req_id}/login",
+            "employment_type": "INTERN",
+            "posted_date": "2026-08-20T17:01:00+0000",
+            "hiring_organization": "AMD",
+            "category": [" Engineering"],
+            # Phenom sends a bare ``false`` here when a posting has one
+            # location, so this field's type cannot be trusted.
+            "multipleLocations": False,
+        }
+        data.update(over)
+        return {"data": data}
+
+    @respx.mock
+    async def test_parses_listings_with_inline_descriptions(self, http):
+        respx.get(url__regex=rf"https://{self.HOST}/api/jobs.*").mock(
+            return_value=httpx.Response(
+                200, json={"jobs": [self._row("90807", "2027 Firmware Engineering Intern")]}
+            )
+        )
+        outcome = await PhenomSource().run(
+            ctx_for(http, boards=[{"provider": "phenom", "board_token": "amd",
+                                   "extra": {"host": self.HOST}}])
+        )
+        assert outcome.status == "ok"
+        job = outcome.jobs[0]
+        assert job.title == "2027 Firmware Engineering Intern"
+        assert job.requisition_id == "90807"
+        assert job.company == "AMD"
+        # The description arrives with the list, so no hydration step is needed.
+        assert "SystemVerilog" in job.description
+        assert "<strong>" not in job.description
+
+    @respx.mock
+    async def test_a_bool_in_multiple_locations_does_not_crash_the_board(self, http):
+        """The field is a list when there are several and ``false`` when there
+        is one; iterating it blindly took the whole board down."""
+        respx.get(url__regex=rf"https://{self.HOST}/api/jobs.*").mock(
+            return_value=httpx.Response(
+                200,
+                json={"jobs": [
+                    self._row("1", "Intern A", multipleLocations=False),
+                    self._row("2", "Intern B", multipleLocations=["Austin", "San Jose"]),
+                ]},
+            )
+        )
+        outcome = await PhenomSource().run(
+            ctx_for(http, boards=[{"provider": "phenom", "board_token": "amd",
+                                   "extra": {"host": self.HOST}}])
+        )
+        assert outcome.status == "ok"
+        by_title = {j.title: j for j in outcome.jobs}
+        assert by_title["Intern A"].locations == []
+        assert by_title["Intern B"].locations == ["Austin", "San Jose"]
+
+    @respx.mock
+    async def test_the_same_posting_across_search_terms_is_returned_once(self, http):
+        """"intern" and "co-op" overlap heavily; the union must not duplicate."""
+        respx.get(url__regex=rf"https://{self.HOST}/api/jobs.*").mock(
+            return_value=httpx.Response(
+                200, json={"jobs": [self._row("55", "Co-op/Intern, Silicon")]}
+            )
+        )
+        outcome = await PhenomSource().run(
+            ctx_for(http, boards=[{"provider": "phenom", "board_token": "amd",
+                                   "extra": {"host": self.HOST}}])
+        )
+        assert len(outcome.jobs) == 1
+
+    @respx.mock
+    async def test_title_gate_filters_at_ingestion(self, http):
+        respx.get(url__regex=rf"https://{self.HOST}/api/jobs.*").mock(
+            return_value=httpx.Response(
+                200,
+                json={"jobs": [
+                    self._row("1", "Product Development Engineer"),
+                    self._row("2", "Summer 2027 Undergrad Intern"),
+                ]},
+            )
+        )
+        outcome = await PhenomSource().run(
+            ctx_for(http,
+                    boards=[{"provider": "phenom", "board_token": "amd",
+                             "extra": {"host": self.HOST}}],
+                    title_gate=lambda t: "intern" in t.lower())
+        )
+        assert {j.title for j in outcome.jobs} == {"Summer 2027 Undergrad Intern"}
+
+    @respx.mock
+    async def test_missing_host_metadata_fails_that_board_only(self, http):
+        outcome = await PhenomSource().run(
+            ctx_for(http, boards=[{"provider": "phenom", "board_token": "amd", "extra": {}}])
         )
         assert outcome.status == "failed"
 

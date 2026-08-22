@@ -261,6 +261,35 @@ def seed_boards_for_companies(
     return candidates
 
 
+def seed_curated_boards(session: Session) -> int:
+    """Register hand-recorded boards that discovery cannot find on its own.
+
+    Most providers expose a token derivable from the company name, so a wrong
+    guess is free and :func:`seed_boards_for_companies` can brute-force them.
+    Phenom does not: its host is an arbitrary careers domain, so a tenant that
+    is never linked from a crawled posting stays invisible forever. AMD sat in
+    that hole -- a preferred employer whose 44 internships were unreachable
+    because nothing in the corpus pointed at ``careers.amd.com``.
+
+    Idempotent, so it is safe to call at the head of every run rather than only
+    at first boot: an existing database has already passed the seeding step and
+    would otherwise never pick up a board added in a later release.
+    """
+    from app.sources.ats.phenom import CURATED_BOARDS
+
+    entries = {
+        f"phenom:{token}": {
+            "provider": "phenom",
+            "board_token": token,
+            "company_name": spec["company_name"],
+            "extra": {"host": spec["host"]},
+            "discovered_via": "curated",
+        }
+        for token, spec in CURATED_BOARDS.items()
+    }
+    return register_boards(session, entries)
+
+
 def prune_failed_boards(session: Session, *, max_failures: int = 12) -> int:
     """Disable boards that have failed persistently.
 

@@ -14,6 +14,7 @@ from app.sources.ats.misc_ats import (
     SmartRecruitersSource,
     WorkableSource,
 )
+from app.sources.ats.phenom import PhenomSource
 from app.sources.ats.workday import WorkdaySource
 from app.sources.base import BoardJobSource, JobSource
 from app.sources.boards.credentialed import (
@@ -39,6 +40,7 @@ ALL_SOURCE_CLASSES: tuple[type[JobSource], ...] = (
     WorkableSource,
     RecruiteeSource,
     WorkdaySource,
+    PhenomSource,
     # Free public boards.
     TheMuseSource,
     RemotiveSource,
