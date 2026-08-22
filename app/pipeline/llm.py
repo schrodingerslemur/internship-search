@@ -20,6 +20,7 @@ vocabulary.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import httpx
@@ -69,6 +70,36 @@ EXTRACT_SYSTEM = (
     "skills: concrete technologies, tools and techniques named in the posting "
     "-- lowercase, at most 20, no soft skills, no duties, no company names."
 )
+
+
+#: How many times to wait out a 429 before giving up on one posting. The free
+#: tiers refill per minute, so a handful of waits covers an ordinary backfill.
+RATE_LIMIT_RETRIES = 4
+#: Fallback pause when the provider does not say how long to wait.
+RATE_LIMIT_BACKOFF = 8.0
+#: Never sleep longer than this on one attempt, however long is suggested.
+RATE_LIMIT_MAX_WAIT = 65.0
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """How long the provider asked us to wait, if it said."""
+    for header in ("retry-after", "x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
+        raw = response.headers.get(header)
+        if not raw:
+            continue
+        try:
+            return max(0.0, float(str(raw).rstrip("s")))
+        except ValueError:
+            continue
+    return None
+
+
+#: Extra completion budget added to every request, on top of what the caller
+#: asked for. Reasoning models (Groq's gpt-oss, OpenAI's o-series) charge their
+#: private reasoning against the same ceiling as the visible answer, so a limit
+#: sized for the answer alone gets consumed before a single character of JSON
+#: is emitted.
+REASONING_HEADROOM = 900
 
 
 class LlmClient:
@@ -121,12 +152,21 @@ class LlmClient:
         if not self.enabled or self.budget_left <= 0:
             return None
         self.calls += 1
+        # Callers ask for the room their *answer* needs. A reasoning model
+        # spends the same ceiling thinking first, and stops at the limit
+        # whether or not it has written anything -- which arrives as a
+        # successful-looking response with an empty body, or a provider-side
+        # "failed to validate JSON" naming an empty generation. Padding every
+        # request is provider-agnostic: a model that does not reason simply
+        # never uses the headroom, and the reply shape is bounded by the
+        # prompt and re-checked by the parser regardless.
+        ceiling = max_tokens + REASONING_HEADROOM
         body: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": max_tokens,
+            "max_tokens": ceiling,
             # Some gateways only honour the newer name; sending both is
             # harmless and saves a per-provider branch.
-            "max_completion_tokens": max_tokens,
+            "max_completion_tokens": ceiling,
             "temperature": 0,
             "messages": [
                 {"role": "system", "content": system},
@@ -137,7 +177,9 @@ class LlmClient:
             "response_format": {"type": "json_object"},
         }
         try:
-            response = self._http().post("/chat/completions", json=body)
+            response = self._wait_out_rate_limit(body)
+            if response is None:
+                return None
             if response.status_code >= 400:
                 log.warning(
                     "llm.http_error",
@@ -154,6 +196,37 @@ class LlmClient:
             log.warning("llm.call_failed", error=f"{type(exc).__name__}: {exc}"[:200])
             return None
         return _parse_json(text or "")
+
+    def _wait_out_rate_limit(self, body: dict[str, Any]) -> httpx.Response | None:
+        """POST one completion, pausing when the provider says to.
+
+        The free tiers this project recommends are rate-limited by design --
+        Groq allows a few thousand tokens a minute -- so 429 is an ordinary
+        part of a backfill, not an error. Treating it as a failure was
+        expensive twice over: the batch reported the postings as "did not
+        return usable JSON", which is a different and much more alarming
+        problem, and the call was already counted against the run budget, so a
+        rate-limited backfill quietly spent its allowance on nothing.
+
+        The provider states how long to wait; that is more reliable than
+        guessing, so it is preferred and only fallen back on when absent.
+        """
+        client = self._http()
+        for attempt in range(RATE_LIMIT_RETRIES + 1):
+            response = client.post("/chat/completions", json=body)
+            if response.status_code != 429:
+                return response
+            if attempt == RATE_LIMIT_RETRIES:
+                log.warning("llm.rate_limited_out", model=self.model, waited=attempt)
+                return response
+
+            delay = _retry_after_seconds(response) or RATE_LIMIT_BACKOFF * (attempt + 1)
+            # A backfill that pauses is doing its job; one that sleeps for
+            # minutes on end has stopped being a backfill.
+            delay = min(delay, RATE_LIMIT_MAX_WAIT)
+            log.info("llm.rate_limited", model=self.model, sleeping=round(delay, 1))
+            time.sleep(delay)
+        return None
 
     def health(self) -> tuple[bool, str]:
         """Whether the configured endpoint answers, and what it said.

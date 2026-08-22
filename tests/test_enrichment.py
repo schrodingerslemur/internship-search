@@ -132,7 +132,10 @@ class TestWireFormat:
             httpx.Response(200, json={"choices": [{"message": {"content": "sorry, I cannot"}}]}),
         ],
     )
-    def test_a_bad_response_yields_nothing_rather_than_raising(self, response):
+    def test_a_bad_response_yields_nothing_rather_than_raising(self, response, monkeypatch):
+        # 429 is now waited out rather than failed, so without this the rate
+        # limited case spends its full backoff in real time.
+        monkeypatch.setattr("app.pipeline.llm.time.sleep", lambda _: None)
         client = stub_client(lambda r: response)
         assert client.extract_facts(normalized_from_job_row(make_job())) is None
 
@@ -315,3 +318,92 @@ class TestEnrichRun:
 
         assert report.enriched == 0
         assert report.errors and "No model configured" in report.errors[0]
+
+
+class TestSurvivingTheFreeTier:
+    """The endpoints this project recommends are rate-limited by design, and
+    reasoning models spend the answer's budget thinking first. Both look like
+    a broken model unless the client knows better."""
+
+    def test_a_rate_limited_call_is_waited_out_rather_than_failed(self, monkeypatch):
+        """429 is an ordinary part of a backfill on a free tier. Treating it as
+        a failure reported "did not return usable JSON" -- a different and much
+        more alarming problem -- and burned the run's budget on nothing."""
+        monkeypatch.setattr("app.pipeline.llm.time.sleep", lambda _: None)
+        attempts = {"n": 0}
+
+        def handler(request):
+            attempts["n"] += 1
+            if attempts["n"] <= 2:
+                return httpx.Response(429, headers={"retry-after": "1"}, json={"error": "slow down"})
+            return completion(json.dumps(GOOD_FACTS))
+
+        client = stub_client(handler)
+        facts = client.extract_facts(normalized_from_job_row(make_job()))
+        assert facts is not None
+        assert attempts["n"] == 3
+
+    def test_waiting_out_a_limit_costs_one_call_not_three(self, monkeypatch):
+        """The budget counts postings read, not HTTP round trips."""
+        monkeypatch.setattr("app.pipeline.llm.time.sleep", lambda _: None)
+        attempts = {"n": 0}
+
+        def handler(request):
+            attempts["n"] += 1
+            if attempts["n"] <= 2:
+                return httpx.Response(429, headers={"retry-after": "1"}, json={})
+            return completion(json.dumps(GOOD_FACTS))
+
+        client = stub_client(handler, max_calls=5)
+        client.extract_facts(normalized_from_job_row(make_job()))
+        assert client.calls == 1
+        assert client.budget_left == 4
+
+    def test_the_provider_is_obeyed_on_how_long_to_wait(self, monkeypatch):
+        slept: list[float] = []
+        monkeypatch.setattr("app.pipeline.llm.time.sleep", slept.append)
+        attempts = {"n": 0}
+
+        def handler(request):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                return httpx.Response(429, headers={"retry-after": "7.5"}, json={})
+            return completion(json.dumps(GOOD_FACTS))
+
+        stub_client(handler).extract_facts(normalized_from_job_row(make_job()))
+        assert slept == [7.5]
+
+    def test_a_suggested_wait_is_capped(self, monkeypatch):
+        """A backfill that pauses is working; one that sleeps for an hour is not."""
+        slept: list[float] = []
+        monkeypatch.setattr("app.pipeline.llm.time.sleep", slept.append)
+
+        def handler(request):
+            return httpx.Response(429, headers={"retry-after": "9000"}, json={})
+
+        stub_client(handler).extract_facts(normalized_from_job_row(make_job()))
+        assert slept and max(slept) <= 65.0
+
+    def test_a_wall_of_rate_limits_eventually_gives_up_quietly(self, monkeypatch):
+        monkeypatch.setattr("app.pipeline.llm.time.sleep", lambda _: None)
+
+        def handler(request):
+            return httpx.Response(429, headers={"retry-after": "1"}, json={})
+
+        assert stub_client(handler).extract_facts(normalized_from_job_row(make_job())) is None
+
+    def test_a_reasoning_model_gets_room_to_think_before_answering(self):
+        """The ceiling covers private reasoning as well as the visible answer,
+        so a limit sized for the answer alone is consumed before any JSON is
+        written -- which arrives as an empty body, not an error."""
+        seen: dict = {}
+
+        def handler(request):
+            seen.update(json.loads(request.content))
+            return completion(json.dumps(GOOD_FACTS))
+
+        stub_client(handler).extract_facts(normalized_from_job_row(make_job()))
+        assert seen["max_completion_tokens"] > 700
+        # Both spellings travel together, so a gateway honouring either one
+        # applies the same ceiling.
+        assert seen["max_tokens"] == seen["max_completion_tokens"]

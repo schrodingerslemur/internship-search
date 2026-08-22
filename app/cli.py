@@ -231,7 +231,16 @@ def _cmd_llm_check(args: argparse.Namespace) -> int:
     print(f"  endpoint : {settings.llm_base_url}")
     print(f"  model    : {settings.llm_model}")
     print(f"  enabled  : {settings.llm_enabled}")
-    print(f"  key      : {'set' if settings.llm_key else 'none (fine for a local model)'}")
+    # Whether a missing key matters depends entirely on where the endpoint is.
+    # Saying "fine for a local model" under a Groq URL is the wrong half of
+    # that sentence, and it is the exact case someone runs this to diagnose.
+    if settings.llm_key:
+        key_note = "set"
+    elif settings.llm_is_local:
+        key_note = "none (not needed for a local model)"
+    else:
+        key_note = "none -- REQUIRED for a remote endpoint; set LLM_API_KEY"
+    print(f"  key      : {key_note}")
 
     with LlmClient(max_calls=2) as client:
         ok, detail = client.health()
