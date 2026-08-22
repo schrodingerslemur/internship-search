@@ -211,6 +211,7 @@ def job_status(
     status: str = Form(...),
     redirect_to: str = Form("/"),
     view: str = Form("review"),
+    surface: str = Form("feed"),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -218,6 +219,12 @@ def job_status(
 
     Every response answers three questions at once: what the job's state is now,
     whether it still belongs on this page, and how to take it back.
+
+    ``surface`` says which page asked, because the three that can act on a job
+    have different things to redraw: the feed swaps a card, the tracker redraws
+    the board, and a job's own page redraws its status block. ``view`` cannot
+    carry this -- it answers a different question, namely which list the job
+    now belongs to.
     """
     job = get_job(db, job_id)
     if job is None:
@@ -251,6 +258,29 @@ def job_status(
                     "undo_status": previous,
                     "redirect_to": "/tracker",
                     "view": "tracker",
+                },
+            },
+        )
+
+    if request.headers.get("HX-Request") and surface == "detail":
+        # A job's own page has no card to swap. Its status block is re-rendered
+        # instead, with the same out-of-band nav counts and undo toast the feed
+        # gets, so acting from either place feels identical.
+        return templates.TemplateResponse(
+            request,
+            "partials/detail_result.html",
+            {
+                "job": job,
+                "view": user_jobs.view_for(db, user, [job]),
+                "active_view": view,
+                "counts": q.dashboard_counts(db, user),
+                "toast": {
+                    "text": message,
+                    "job_id": job.id,
+                    "undo_status": previous,
+                    "redirect_to": redirect_to,
+                    "view": view,
+                    "surface": "detail",
                 },
             },
         )
@@ -293,6 +323,7 @@ def job_opened(
     job_id: str,
     request: Request,
     view: str = Form("review"),
+    surface: str = Form("feed"),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -307,14 +338,22 @@ def job_opened(
         return HTMLResponse("That job no longer exists.", status_code=404)
     user_jobs.mark_opened(db, user, job)
     db.commit()
+
+    # Same reason as the status route: the follow-up question that comes back
+    # has to point at something that exists on the page that asked.
+    template = (
+        "partials/detail_status.html" if surface == "detail" else "partials/job_actions.html"
+    )
     return templates.TemplateResponse(
         request,
-        "partials/job_actions.html",
+        template,
         {
             "job": job,
             "current_status": user_jobs.status_of(user_jobs.get_state(db, user, job)),
             "asking": True,
             "active_view": view,
+            "surface": surface,
+            "view": user_jobs.view_for(db, user, [job]),
         },
     )
 
@@ -324,6 +363,7 @@ def job_not_applied(
     job_id: str,
     request: Request,
     view: str = Form("review"),
+    surface: str = Form("feed"),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -334,13 +374,21 @@ def job_not_applied(
     state = user_jobs.get_or_create_state(db, user, job)
     state.opened_at = None
     db.commit()
+
+    # The detail page swaps its whole status block, so it needs the block back
+    # rather than just the bar that sits inside it.
+    template = (
+        "partials/detail_status.html" if surface == "detail" else "partials/job_actions.html"
+    )
     return templates.TemplateResponse(
         request,
-        "partials/job_actions.html",
+        template,
         {
             "job": job,
             "current_status": user_jobs.status_of(state),
             "active_view": view,
+            "surface": surface,
+            "view": user_jobs.view_for(db, user, [job]),
         },
     )
 

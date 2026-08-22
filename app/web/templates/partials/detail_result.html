@@ -1,0 +1,24 @@
+{# The response to an action taken on a job's own page.
+
+   The status block is redrawn in place -- unlike the feed, nothing is ever
+   removed here, because you are looking at this one job and it does not stop
+   existing because you dismissed it. The nav counts and the undo toast are
+   refreshed out-of-band exactly as they are from the feed, so the two surfaces
+   stay in step. #}
+{% include "partials/detail_status.html" %}
+
+<span id="job-state-chip-{{ job.id }}" hx-swap-oob="true">
+  {%- include "partials/detail_state_chip.html" -%}
+</span>
+<div id="toast-host" hx-swap-oob="afterbegin">
+  {% include "partials/toast.html" %}
+</div>
+<span id="nav-review-count" hx-swap-oob="true">
+  {%- with n = counts.to_review, n_label = 'to review' %}{% include "partials/nav_count.html" %}{% endwith -%}
+</span>
+<span id="nav-saved-count" hx-swap-oob="true">
+  {%- with n = counts.saved, n_label = 'saved' %}{% include "partials/nav_count.html" %}{% endwith -%}
+</span>
+<span id="nav-applied-count" hx-swap-oob="true">
+  {%- with n = counts.applied, n_label = 'applied' %}{% include "partials/nav_count.html" %}{% endwith -%}
+</span>

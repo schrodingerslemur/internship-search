@@ -1,0 +1,7 @@
+{# The state chip beside the company name. Its own file because it is redrawn
+   out-of-band whenever a decision is taken lower down the page. #}
+{%- set chip_state = (view or {}).get(job.id) -%}
+{%- set s = chip_state.status if chip_state else 'new' -%}
+{%- if s != 'new' -%}
+  &middot; <span class="state {{ s }}">{{ status_meta(s).icon }} {{ status_meta(s).label }}</span>
+{%- endif -%}

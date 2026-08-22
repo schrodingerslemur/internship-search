@@ -11,9 +11,9 @@
 <h1 style="margin-top:14px">{{ job.title }}</h1>
 <div class="sub">
   <strong>{{ job.company_name }}</strong>
-  {% if st != 'new' %}
-    &middot; <span class="state {{ st }}">{{ status_meta(st).icon }} {{ status_meta(st).label }}</span>
-  {% endif %}
+  {# Refreshed out-of-band after any action, so the chip at the top of the page
+     can never disagree with the buttons further down it. #}
+  <span id="job-state-chip-{{ job.id }}">{% include "partials/detail_state_chip.html" %}</span>
   &middot; 📍 {{ job.location_raw or 'Location not listed' }}
   &middot; {{ job.remote_status|humanize }}
   &middot; {{ job.employment_type|humanize }}
@@ -24,31 +24,10 @@
   <div>
     <div class="panel" style="margin-bottom:16px">
       {# The same action bar as the feed, so the primary action and the words on
-         it never differ between the two places you can act on a job. #}
-      {% with current_status = st, asking = (v.awaiting_answer if v else False) %}
-        {% include "partials/job_actions.html" %}
-      {% endwith %}
-      <div class="help" style="margin-top:10px">
-        Apply opens the employer's own application page in a new tab. Nothing is
-        submitted for you &mdash; we ask afterwards whether you actually applied.
-      </div>
-
-      {% if st in ('applied','assessment','interview','offer','rejected') %}
-      <form method="post" action="/job/{{ job.id }}/status" class="stage-form">
-        <label for="stage-{{ job.id }}">Where is this application now?</label>
-        <div class="actions">
-          <select id="stage-{{ job.id }}" name="status">
-            {% for value in ['applied','assessment','interview','offer','rejected'] %}
-              <option value="{{ value }}" {% if st == value %}selected{% endif %}>
-                {{ status_meta(value).label }}</option>
-            {% endfor %}
-          </select>
-          <input type="hidden" name="redirect_to" value="/job/{{ job.id }}">
-          <input type="hidden" name="view" value="applied">
-          <button class="btn" type="submit">Update</button>
-        </div>
-      </form>
-      {% endif %}
+         it never differ between the two places you can act on a job. The
+         surrounding block carries the id the buttons target -- without it they
+         pointed at the feed's card, which does not exist here. #}
+      {% include "partials/detail_status.html" %}
     </div>
 
     {% if job.description %}

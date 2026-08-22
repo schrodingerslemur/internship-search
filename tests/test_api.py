@@ -598,6 +598,112 @@ class TestChannelSetup:
         assert "is set up and ready" in client.get("/notifications").text
 
 
+class TestActingFromAJobsOwnPage:
+    """Every control on the detail page must actually do something.
+
+    The action bar is shared with the feed, where the response replaces the
+    job's card. The detail page has no card, so the buttons pointed at an
+    element that was not on the page -- and HTMX aborts on a target it cannot
+    resolve *before* sending anything. The result was a page of controls that
+    changed nothing and gave no sign of having been pressed.
+    """
+
+    def _detail(self, client, job_id):
+        return client.get(f"/job/{job_id}").text
+
+    def test_every_hx_target_on_the_page_exists_on_the_page(self, client, seeded):
+        import re
+
+        body = self._detail(client, 1)
+        targets = set(re.findall(r'hx-target="(#[^"]+)"', body))
+        assert targets, "the page should have at least one htmx control"
+        for target in targets:
+            assert f'id="{target[1:]}"' in body, f"{target} matches nothing on the page"
+
+    def test_dismissing_from_the_detail_page_changes_the_status(self, client, seeded, session):
+        from app.services import auth, user_jobs
+
+        response = client.post(
+            "/job/1/status",
+            data={"status": "dismissed", "view": "review", "surface": "detail"},
+            headers={"HX-Request": "true"},
+        )
+        assert response.status_code == 200
+
+        user = auth.find_by_email(session, "tester@example.com")
+        assert user_jobs.status_of(user_jobs.get_state(session, user, 1)) == "dismissed"
+
+    def test_the_response_redraws_the_block_the_buttons_target(self, client, seeded):
+        response = client.post(
+            "/job/1/status",
+            data={"status": "dismissed", "view": "review", "surface": "detail"},
+            headers={"HX-Request": "true"},
+        )
+        assert 'id="job-status-1"' in response.text
+        # ...and it reflects the new state rather than the old one.
+        assert "Restore to review" in response.text
+
+    def test_the_action_is_confirmed_and_undoable(self, client, seeded):
+        response = client.post(
+            "/job/1/status",
+            data={"status": "dismissed", "view": "review", "surface": "detail"},
+            headers={"HX-Request": "true"},
+        )
+        assert "toast" in response.text
+        assert "Undo" in response.text
+
+    @pytest.mark.parametrize("stage", ["applied", "assessment", "interview", "offer", "rejected"])
+    def test_each_application_stage_can_be_set_from_the_detail_page(
+        self, client, seeded, session, stage
+    ):
+        from app.services import auth, user_jobs
+
+        response = client.post(
+            "/job/1/status",
+            data={"status": stage, "view": "applied", "surface": "detail"},
+            headers={"HX-Request": "true"},
+        )
+        assert response.status_code == 200
+        user = auth.find_by_email(session, "tester@example.com")
+        assert user_jobs.status_of(user_jobs.get_state(session, user, 1)) == stage
+
+    def test_the_feed_still_swaps_a_whole_card(self, client, seeded):
+        """The fix must not change what the feed does."""
+        response = client.post(
+            "/job/1/status",
+            data={"status": "saved", "view": "review", "surface": "feed"},
+            headers={"HX-Request": "true"},
+        )
+        assert 'id="job-1"' in response.text
+        assert 'id="job-status-1"' not in response.text
+
+    def test_opening_an_application_asks_on_the_page_that_asked(self, client, seeded):
+        response = client.post(
+            "/job/1/opened",
+            data={"view": "review", "surface": "detail"},
+            headers={"HX-Request": "true"},
+        )
+        assert "Did you apply?" in response.text
+        # The follow-up's own buttons must resolve too, or the question is a
+        # dead end.
+        assert 'hx-target="#job-status-1"' in response.text
+        assert 'id="job-status-1"' in response.text
+
+    def test_saying_not_yet_from_the_detail_page_returns_the_block(self, client, seeded):
+        client.post(
+            "/job/1/opened",
+            data={"view": "review", "surface": "detail"},
+            headers={"HX-Request": "true"},
+        )
+        response = client.post(
+            "/job/1/not-applied",
+            data={"view": "review", "surface": "detail"},
+            headers={"HX-Request": "true"},
+        )
+        assert 'id="job-status-1"' in response.text
+        assert "Did you apply?" not in response.text
+
+
 class TestSettingsPageSplit:
     """Search preferences and notification setup live on separate pages.
 

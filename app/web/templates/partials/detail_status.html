@@ -1,0 +1,48 @@
+{# Everything on a job's own page that a decision changes.
+
+   Swapped as one block, so the action bar, the state chip and the stage
+   selector can never disagree with each other after an action. The feed
+   replaces a whole card for the same reason; this page has no card, which is
+   what the old markup assumed. #}
+{% set v = (view or {}).get(job.id) %}
+{% set st = v.status if v else 'new' %}
+<div id="job-status-{{ job.id }}">
+  {% with current_status = st, asking = (v.awaiting_answer if v else False), surface = 'detail' %}
+    {% include "partials/job_actions.html" %}
+  {% endwith %}
+
+  <div class="help" style="margin-top:10px">
+    {% if st == 'dismissed' %}
+      Dismissed, so it's out of your feed and your emails. Restoring puts it
+      straight back.
+    {% elif st in ('applied','assessment','interview','offer','rejected') %}
+      Tracked as <strong>{{ status_meta(st).label|lower }}</strong>. Move it along
+      below as things happen.
+    {% else %}
+      Apply opens the employer's own application page in a new tab. Nothing is
+      submitted for you &mdash; we ask afterwards whether you actually applied.
+    {% endif %}
+  </div>
+
+  {% if st in ('applied','assessment','interview','offer','rejected') %}
+  {# Posts through HTMX like every other control here, so moving a stage gives
+     the same immediate answer as pressing Dismiss rather than a full reload. #}
+  <form method="post" action="/job/{{ job.id }}/status" class="stage-form"
+        hx-post="/job/{{ job.id }}/status" hx-target="#job-status-{{ job.id }}"
+        hx-swap="outerHTML" hx-disabled-elt="find button">
+    <label for="stage-{{ job.id }}">Where is this application now?</label>
+    <div class="actions">
+      <select id="stage-{{ job.id }}" name="status">
+        {% for value in ['applied','assessment','interview','offer','rejected'] %}
+          <option value="{{ value }}" {% if st == value %}selected{% endif %}>
+            {{ status_meta(value).label }}</option>
+        {% endfor %}
+      </select>
+      <input type="hidden" name="redirect_to" value="/job/{{ job.id }}">
+      <input type="hidden" name="view" value="applied">
+      <input type="hidden" name="surface" value="detail">
+      <button class="btn" type="submit">Update</button>
+    </div>
+  </form>
+  {% endif %}
+</div>

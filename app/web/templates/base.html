@@ -182,6 +182,26 @@ label{font-size:12.5px;color:var(--muted);display:block;margin-bottom:4px}
    competing with the status colours already on the card. */
 .job.cursor{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 .kbd-hint{color:var(--dim);font-size:12px}
+/* Pressed state. A button that has been clicked has to look clicked before the
+   response lands, or a slow request is indistinguishable from a dead control --
+   which is exactly how a broken target went unnoticed. htmx adds .htmx-request
+   to the element for the life of the request. */
+.btn:active{transform:translateY(1px)}
+.htmx-request.btn,.htmx-request .btn,.btn.htmx-request{
+  opacity:.62;cursor:progress;pointer-events:none}
+.htmx-request.btn::after,.btn.htmx-request::after{
+  content:"";display:inline-block;width:9px;height:9px;margin-left:7px;
+  vertical-align:-1px;border:2px solid currentColor;border-right-color:transparent;
+  border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* The block being replaced dims while its replacement is in flight, so the
+   feedback is not limited to the one button that was pressed. */
+.htmx-swapping{opacity:.5;transition:opacity .12s ease}
+button:disabled,.btn:disabled{opacity:.55;cursor:not-allowed}
+@media (prefers-reduced-motion:reduce){
+  .htmx-request.btn::after,.btn.htmx-request::after{animation:none}
+  .btn:active{transform:none}
+}
 /* Settings rows: label in a fixed column, control beside it. One question per
    line reads far faster than a grid of same-sized boxes. */
 .setting-group{padding:4px 18px}
@@ -640,7 +660,10 @@ ul.clean li{padding:3px 0;font-size:13px}
     htmx.ajax('POST', link.dataset.recordOpen, {
       target: link.dataset.recordTarget,
       swap: 'outerHTML',
-      values: { view: link.dataset.recordView || 'review' },
+      values: {
+        view: link.dataset.recordView || 'review',
+        surface: link.dataset.recordSurface || 'feed',
+      },
     });
   });
 
@@ -708,6 +731,15 @@ ul.clean li{padding:3px 0;font-size:13px}
   });
   document.body.addEventListener('htmx:sendError', () => {
     show('We could not reach the server. Your change was not saved.', true);
+  });
+
+  // A target that does not exist on the page makes htmx abort *before*
+  // sending anything, so the button appears to do nothing at all and no error
+  // is raised. That is how every control on the job detail page came to be
+  // dead for so long. Now it is loud, and the console line names the selector.
+  document.body.addEventListener('htmx:targetError', e => {
+    console.error('htmx: no element matches', e.detail && e.detail.target);
+    show('Something is wrong with this page. Reload and try again.', true);
   });
 })();
 </script>
