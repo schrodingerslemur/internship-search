@@ -107,6 +107,29 @@ h3{font-size:14px;margin:0 0 8px;color:var(--muted);text-transform:uppercase;let
 .job{background:var(--panel);border:1px solid var(--line);border-radius:10px;
  padding:14px 16px;margin-bottom:10px;display:flex;gap:16px;align-items:flex-start}
 .job:hover{border-color:var(--accent-dim)}
+
+/* The other requisitions for the role in the card above. Tucked directly
+   under it and visually subordinate to it, so the feed still reads as one
+   card per role -- while making it obvious that the extra openings exist and
+   can be applied to individually. */
+.group{margin:-6px 0 10px;border:1px solid var(--line);border-top:0;
+ border-radius:0 0 10px 10px;background:var(--panel);font-size:13px}
+.group>summary{cursor:pointer;padding:8px 16px;display:flex;gap:8px;
+ align-items:baseline;flex-wrap:wrap;color:var(--dim);list-style:none}
+.group>summary::-webkit-details-marker{display:none}
+.group>summary::before{content:'▸';color:var(--dim);font-size:11px}
+.group[open]>summary::before{content:'▾'}
+.group>summary:hover{color:var(--fg)}
+.group>summary .n{color:var(--fg);font-weight:600}
+.group-list{list-style:none;margin:0;padding:0 16px 10px}
+.group-list li{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+ padding:7px 0;border-top:1px solid var(--line)}
+.group-list .where{min-width:0}
+.group-list .req{color:var(--dim);font-size:12px}
+.group-list .spacer{flex:1}
+/* Selection follows the card, never the row: a grouped card stands for every
+   requisition under it, so these track the lead rather than being clicked. */
+.group-pick{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 .job .score{flex:0 0 62px;text-align:center}
 .job .score .v{font-size:21px;font-weight:700;line-height:1}
 .job .score .m{font-size:10px;color:var(--dim)}
@@ -388,7 +411,7 @@ h3.adv-h{margin:22px 0 10px;color:var(--muted)}
 .toast{display:flex;align-items:center;gap:14px;background:var(--panel);
  border:1px solid var(--line);border-radius:10px;padding:11px 14px;
  box-shadow:0 12px 34px rgba(0,0,0,.34);font-size:13.5px;pointer-events:auto;
- animation:toast-in .18s ease}
+ animation:toast-in .18s ease;flex-wrap:wrap}
 .toast.bad{border-color:var(--bad)}
 .toast .t{flex:1;min-width:0}
 .toast form{margin:0}
@@ -397,6 +420,17 @@ h3.adv-h{margin:22px 0 10px;color:var(--muted)}
 .toast .undo:hover{text-decoration:underline}
 .toast .dismiss{background:none;border:0;color:var(--dim);font:inherit;cursor:pointer;
  font-size:16px;line-height:1;padding:4px 6px;border-radius:6px}
+/* The "why?" row sits on its own line beneath the confirmation, so asking
+   never pushes Undo off the edge of a narrow toast. It is the last thing in
+   the box and the least urgent thing in it: the dismissal has already
+   happened, and no answer is required. */
+.toast .why{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:6px;
+ padding-top:9px;margin-top:2px;border-top:1px solid var(--line)}
+.toast .why-q{color:var(--dim);font-size:12.5px;margin-right:2px}
+.toast .chip{background:none;border:1px solid var(--line);color:var(--fg);
+ font:inherit;font-size:12.5px;cursor:pointer;padding:3px 9px;border-radius:999px;
+ line-height:1.5}
+.toast .chip:hover{border-color:var(--accent);color:var(--accent)}
 @keyframes toast-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 
 /* ---------------------------------------------------------------------
@@ -590,9 +624,22 @@ ul.clean li{padding:3px 0;font-size:13px}
     if (all) all.checked = n > 0 && n === picks().length;
   }
 
+  // A card that stands for several requisitions selects all of them. Without
+  // this, "select all then dismiss" would clear one opening per group and leave
+  // its identical siblings sitting in the feed, which reads as the button
+  // having half worked.
+  function syncGroup(pick) {
+    const card = pick.closest('article.job');
+    if (!card) return;
+    const group = document.getElementById('group-' + card.id.slice('job-'.length));
+    if (group) group.querySelectorAll('.group-pick').forEach(p => { p.checked = pick.checked; });
+  }
+
   document.addEventListener('change', e => {
     if (e.target.id === 'pick-all') {
       picks().forEach(p => { p.checked = e.target.checked; });
+    } else if (e.target.classList.contains('job-pick')) {
+      syncGroup(e.target);
     }
     if (e.target.classList.contains('job-pick') || e.target.id === 'pick-all') sync();
   });
@@ -612,6 +659,10 @@ ul.clean li{padding:3px 0;font-size:13px}
 (function () {
   const host = document.getElementById('toast-host');
   const LIFETIME = 7000;
+  // A toast that asks why a job was dismissed has to outlive one that only
+  // confirms: seven seconds is enough to notice an Undo, not enough to read
+  // six options and choose one.
+  const ASKING_LIFETIME = 15000;
 
   function retire(toast) {
     if (!toast || toast.dataset.retiring) return;
@@ -623,9 +674,14 @@ ul.clean li{padding:3px 0;font-size:13px}
     if (!toast || toast.dataset.watched) return;
     toast.dataset.watched = '1';
     // Only ever keep a couple on screen; a rapid triage session would
-    // otherwise bury the page under its own confirmations.
-    Array.from(host.children).slice(0, -2).forEach(retire);
-    setTimeout(() => retire(toast), LIFETIME);
+    // otherwise bury the page under its own confirmations. An unanswered
+    // "why?" is spared the cull -- it is the one toast that is still asking
+    // for something, and discarding it silently drops the answer.
+    Array.from(host.children).slice(0, -2)
+      .filter(t => !t.querySelector('.why'))
+      .forEach(retire);
+    const asking = !!toast.querySelector('.why');
+    setTimeout(() => retire(toast), asking ? ASKING_LIFETIME : LIFETIME);
   }
 
   function show(text, bad) {
@@ -657,9 +713,14 @@ ul.clean li{padding:3px 0;font-size:13px}
   document.addEventListener('click', e => {
     const link = e.target.closest('[data-record-open]');
     if (!link || !window.htmx) return;
+    // A link inside a collapsed group has nothing to redraw -- the follow-up
+    // question belongs to the card, not to one of its siblings. HTMX aborts on
+    // a target it cannot resolve, so an absent one has to mean "record it and
+    // swap nothing" rather than an unresolvable element.
+    const target = link.dataset.recordTarget;
     htmx.ajax('POST', link.dataset.recordOpen, {
-      target: link.dataset.recordTarget,
-      swap: 'outerHTML',
+      target: target || 'body',
+      swap: target ? 'outerHTML' : 'none',
       values: {
         view: link.dataset.recordView || 'review',
         surface: link.dataset.recordSurface || 'feed',

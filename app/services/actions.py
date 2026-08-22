@@ -51,15 +51,19 @@ def set_status(
     user: User,
     *,
     now: datetime | None = None,
+    reason: str | None = None,
 ) -> Application:
     """Move a job to a new tracker state for this user, stamping the date.
 
     The decision is recorded against the user, never against the shared job
     row: someone else applying to a posting must not silence it for you.
+
+    ``reason`` is the optional one-tap dismissal reason. It is only meaningful
+    for a dismissal, and an unrecognised code is discarded rather than stored.
     """
     now = now or utcnow()
     previous = user_jobs.status_of(user_jobs.get_state(session, user, job))
-    user_jobs.set_status(session, user, job, status.value, now=now)
+    user_jobs.set_status(session, user, job, status.value, now=now, reason=reason)
 
     application = get_or_create_application(session, job, user)
     application.status = status.value

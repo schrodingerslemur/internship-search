@@ -189,3 +189,15 @@ templates.env.globals["status_meta"] = status_meta
 templates.env.globals["remote_meta"] = remote_meta
 templates.env.globals["priority_meta"] = priority_meta
 templates.env.globals["now"] = utcnow
+
+#: The dismissal-reason chips, available to every template that renders a
+#: toast. A global rather than a per-route key: the toast is included from four
+#: different responses, and one of them forgetting to pass the list would drop
+#: the question silently rather than visibly.
+from app.services.user_jobs import DISMISS_REASONS  # noqa: E402 - avoids a cycle at import time
+
+templates.env.globals["dismiss_reasons"] = DISMISS_REASONS
+
+from app.services.jobs_query import group_jobs  # noqa: E402 - same reason as above
+
+templates.env.globals["group_jobs"] = group_jobs

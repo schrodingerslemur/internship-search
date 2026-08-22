@@ -1,5 +1,12 @@
 {# A confirmation with its own undo. Because every reversible action lands
-   here, none of them needs a confirmation dialog beforehand. #}
+   here, none of them needs a confirmation dialog beforehand.
+
+   A dismissal also asks why -- but only here, after the fact. The job is
+   already gone from the list by the time these chips appear, so answering is
+   genuinely optional and triage is never blocked on it. That matters: a
+   dismissal with no reason is nearly unlearnable, because "no" could mean the
+   role, the location, the seniority, sponsorship, the employer or the timing,
+   and those imply opposite corrections to the ranking. #}
 <div class="toast{% if toast.bad %} bad{% endif %}">
   <span class="t">{{ toast.text }}</span>
   {% if toast.undo_status %}
@@ -13,4 +20,20 @@
     </form>
   {% endif %}
   <button class="dismiss" type="button" aria-label="Dismiss this message">&times;</button>
+
+  {% if toast.ask_reason and dismiss_reasons %}
+    {# One tap, no dialog, no required answer. The whole row replaces itself
+       with an acknowledgement, so a second tap is impossible and the toast
+       does not grow. #}
+    <div class="why" id="why-{{ toast.job_id }}">
+      <span class="why-q">Why?</span>
+      {% for code, label in dismiss_reasons %}
+        <button class="chip" type="button"
+                hx-post="/job/{{ toast.job_id }}/dismiss-reason"
+                hx-vals='{"reason": "{{ code }}"}'
+                hx-target="#why-{{ toast.job_id }}"
+                hx-swap="outerHTML">{{ label }}</button>
+      {% endfor %}
+    </div>
+  {% endif %}
 </div>

@@ -34,6 +34,15 @@ def _job_page_context(request: Request, db: Session, user: User, view_name: str)
     params["view"] = view_name
     filters = q.JobFilters.from_query(params)
     page = q.search_jobs(db, filters, user)
+
+    # Log what this page is about to show, before it shows it. Without the
+    # denominator there is no precision@k, and an impression that was never
+    # recorded cannot be reconstructed afterwards from the decisions alone.
+    user_jobs.record_impression(
+        db, user, view_name, page.jobs, total_available=getattr(page, "total", None)
+    )
+    db.commit()
+
     return {
         "active_view": view_name,
         "counts": q.dashboard_counts(db, user),
@@ -212,6 +221,7 @@ def job_status(
     redirect_to: str = Form("/"),
     view: str = Form("review"),
     surface: str = Form("feed"),
+    reason: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -235,10 +245,17 @@ def job_status(
         return HTMLResponse("Invalid status", status_code=400)
 
     previous = user_jobs.status_of(user_jobs.get_state(db, user, job))
-    set_status(db, job, new_status, user)
+    set_status(db, job, new_status, user, reason=reason or None)
     db.commit()
 
     message = OUTCOME.get(status, "Updated")
+    # Only a dismissal has a reason worth asking for, and only while one is
+    # still missing: re-dismissing a job that already carries a reason would
+    # ask a question the user has already answered.
+    state = user_jobs.get_state(db, user, job)
+    ask_reason = new_status is JobStatus.DISMISSED and not (
+        state is not None and state.dismiss_reason
+    )
 
     if request.headers.get("HX-Request") and view == "tracker":
         # The board is re-rendered whole rather than the card being spliced
@@ -256,6 +273,7 @@ def job_status(
                     "text": message,
                     "job_id": job.id,
                     "undo_status": previous,
+                    "ask_reason": ask_reason,
                     "redirect_to": "/tracker",
                     "view": "tracker",
                 },
@@ -278,6 +296,7 @@ def job_status(
                     "text": message,
                     "job_id": job.id,
                     "undo_status": previous,
+                    "ask_reason": ask_reason,
                     "redirect_to": redirect_to,
                     "view": view,
                     "surface": "detail",
@@ -309,6 +328,7 @@ def job_status(
                     # Undo puts the job back where it actually was, rather than
                     # assuming everything came from the review feed.
                     "undo_status": previous,
+                    "ask_reason": ask_reason,
                     "redirect_to": redirect_to,
                     "view": view,
                 },
@@ -356,6 +376,37 @@ def job_opened(
             "view": user_jobs.view_for(db, user, [job]),
         },
     )
+
+
+@router.post("/job/{job_id}/dismiss-reason")
+def job_dismiss_reason(
+    job_id: str,
+    request: Request,
+    reason: str = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Attach a reason to a dismissal that has already been recorded.
+
+    The chips live in the undo toast rather than in the action bar, because by
+    the time the user answers, the card is gone from the list -- the dismissal
+    happened first and was never blocked on this. Answering is optional, and
+    the reply is a plain acknowledgement rather than a re-render: nothing on
+    the page depends on which reason was chosen.
+    """
+    job = get_job(db, job_id)
+    if job is None:
+        return HTMLResponse("That job no longer exists.", status_code=404)
+
+    state = user_jobs.set_dismiss_reason(db, user, job, reason)
+    if state is None:
+        # An unknown code, or a job no longer dismissed because undo won the
+        # race. Neither is worth an error: the reason simply does not apply.
+        return HTMLResponse('<span class="t">Dismissed</span>')
+    db.commit()
+
+    label = dict(user_jobs.DISMISS_REASONS).get(reason, reason)
+    return HTMLResponse(f'<span class="t">Noted &mdash; {label.lower()}</span>')
 
 
 @router.post("/job/{job_id}/not-applied")

@@ -717,3 +717,81 @@ def recent_notifications(session: Session, limit: int = 20) -> list[Notification
             select(Notification).order_by(Notification.created_at.desc()).limit(limit)
         ).all()
     )
+
+
+@dataclass
+class JobGroup:
+    """One card's worth of feed: a posting, plus its identical siblings.
+
+    Employers routinely advertise one role as many requisitions -- GE
+    Healthcare runs eleven "Graduate Engineer Trainee" reqs, Copart eleven
+    "Software Engineering Intern". These are genuinely separate openings with
+    distinct requisition ids, usually differing only by location, so merging
+    them in the database would delete real jobs someone might want to apply to.
+
+    The fix is presentational and stops here: one card is shown, the rest are
+    listed underneath it, and every one of them keeps its own link and its own
+    state. Nothing is hidden and nothing is discarded -- the feed simply stops
+    spending eleven cards to say one thing.
+    """
+
+    lead: Job
+    others: list[Job] = field(default_factory=list)
+
+    @property
+    def count(self) -> int:
+        return 1 + len(self.others)
+
+    @property
+    def is_group(self) -> bool:
+        return bool(self.others)
+
+    @property
+    def locations(self) -> list[str]:
+        """The distinct places this role is open, best-effort and deduplicated.
+
+        This is what the siblings almost always differ by, so it is the one
+        thing worth showing without expanding the group.
+        """
+        seen: list[str] = []
+        for job in (self.lead, *self.others):
+            label = (job.location_raw or "").strip()
+            if label and label not in seen:
+                seen.append(label)
+        return seen
+
+
+def group_jobs(jobs: list[Job]) -> list[JobGroup]:
+    """Collapse same-employer, same-title postings into one entry each.
+
+    Applied after paging, deliberately: grouping across page boundaries would
+    mean a page's contents depended on rows it never fetched. A page therefore
+    renders fewer cards than it holds jobs, which is the intended effect -- the
+    count beside the list keeps reporting jobs, because that is what the user
+    is choosing among.
+
+    Order is preserved: a group appears where its best-ranked member did, so
+    collapsing never promotes anything up the feed.
+    """
+    groups: list[JobGroup] = []
+    index: dict[tuple[Any, str], JobGroup] = {}
+
+    for job in jobs:
+        title = (job.title or "").strip().casefold()
+        # Fall back to the company name when there is no company row, so two
+        # postings from an unregistered employer still group together.
+        company: Any = job.company_id or (job.company_name or "").strip().casefold()
+        key = (company, title)
+        if not title or not company:
+            groups.append(JobGroup(lead=job))
+            continue
+
+        existing = index.get(key)
+        if existing is None:
+            group = JobGroup(lead=job)
+            index[key] = group
+            groups.append(group)
+        else:
+            existing.others.append(job)
+
+    return groups

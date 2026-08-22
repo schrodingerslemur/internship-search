@@ -77,6 +77,40 @@ class ApplicationNote(Base):
     application: Mapped[Application] = relationship(back_populates="notes")
 
 
+class FeedImpression(Base):
+    """The jobs a feed actually put in front of one user, once.
+
+    This is the denominator. Decisions on their own say what was chosen but not
+    what was on offer, and precision@k -- the only honest measure of whether the
+    ranking is improving -- is undefined without knowing what was shown. A save
+    rate that rises because the feed got shorter looks identical to one that
+    rises because the ranking got better, unless this row exists.
+
+    Deliberately append-only and cheap: ranked job ids and their scores at the
+    moment of display, nothing that needs maintaining. Signal not captured now
+    is gone for good, which is why this lands before anything that learns from
+    it rather than alongside.
+    """
+
+    __tablename__ = "feed_impressions"
+    __table_args__ = (Index("ix_feed_impressions_user_time", "user_id", "shown_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    #: Which list was being looked at -- review, saved, dismissed, applied.
+    view: Mapped[str] = mapped_column(String(30), default="review", nullable=False)
+    shown_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    #: Ranked job ids as displayed, best first.
+    job_ids: Mapped[list] = mapped_column(JSON, default=list)
+    #: Their scores at display time, positionally aligned with ``job_ids``.
+    scores: Mapped[list] = mapped_column(JSON, default=list)
+    #: How many rows the list held in total, of which ``job_ids`` is the top
+    #: slice actually rendered.
+    total_available: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class JobSourceRecord(Base, TimestampMixin):
     """Registry row per job source: health, config, and adaptive yield stats."""
 

@@ -239,3 +239,87 @@ class TestDismissalTimestamps:
                 for row in conn.execute("PRAGMA table_info(user_job_state)").fetchall()
             }
         assert "dismissed_at" not in columns
+
+
+class TestCapturingDecisionSignal:
+    """The migration that made decisions learnable later.
+
+    Nothing it adds is retroactive -- a dismissal already recorded has no
+    reason, and a feed already rendered left no impression -- so the only thing
+    to verify is that the places to put that signal exist and that an
+    already-patched database is not broken by adding them twice.
+    """
+
+    def test_the_decision_columns_arrive(self, legacy_db):
+        with sqlite3.connect(legacy_db) as conn:
+            _insert_user(conn)
+            _insert_job(conn, "c1", "dismissed", True)
+
+        command.upgrade(_alembic_config(legacy_db), "head")
+
+        with sqlite3.connect(legacy_db) as conn:
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(user_job_state)").fetchall()
+            }
+        assert {"dismiss_reason", "score_at_save", "score_at_dismiss"} <= columns
+
+    def test_the_impression_log_arrives(self, legacy_db):
+        command.upgrade(_alembic_config(legacy_db), "head")
+
+        with sqlite3.connect(legacy_db) as conn:
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(feed_impressions)").fetchall()
+            }
+        assert {"user_id", "view", "shown_at", "job_ids", "scores", "total_available"} <= columns
+
+    def test_existing_decisions_survive_untouched(self, legacy_db):
+        """Adding somewhere to record a reason must not disturb the decisions
+        already made without one."""
+        with sqlite3.connect(legacy_db) as conn:
+            _insert_user(conn)
+            _insert_job(conn, "c1", "applied", True)
+
+        command.upgrade(_alembic_config(legacy_db), "head")
+
+        with sqlite3.connect(legacy_db) as conn:
+            row = conn.execute(
+                "SELECT status, dismiss_reason FROM user_job_state"
+            ).fetchone()
+        assert row[0] == "applied"
+        assert row[1] is None
+
+    def test_it_can_be_rolled_back(self, legacy_db):
+        config = _alembic_config(legacy_db)
+        command.upgrade(config, "head")
+        command.downgrade(config, "f5a6b7c8d9e0")
+
+        with sqlite3.connect(legacy_db) as conn:
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(user_job_state)").fetchall()
+            }
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+        assert "dismiss_reason" not in columns
+        assert "feed_impressions" not in tables
+
+    def test_running_it_twice_is_harmless(self, legacy_db):
+        """A database that has been through a manual fix-up is the normal case
+        here, so re-adding a column that is already present must not abort."""
+        config = _alembic_config(legacy_db)
+        command.upgrade(config, "head")
+        command.downgrade(config, "f5a6b7c8d9e0")
+        command.upgrade(config, "head")
+
+        with sqlite3.connect(legacy_db) as conn:
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(user_job_state)").fetchall()
+            }
+        assert "dismiss_reason" in columns

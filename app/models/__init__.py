@@ -22,6 +22,7 @@ from app.models.job import DedupDecision, Job, JobEvent, JobListing
 from app.models.tracking import (
     Application,
     ApplicationNote,
+    FeedImpression,
     JobSourceRecord,
     Notification,
     NotificationItem,
@@ -43,6 +44,7 @@ __all__ = [
     "TERMINAL_STATUSES",
     "Application",
     "ApplicationNote",
+    "FeedImpression",
     "AtsBoard",
     "Base",
     "CandidateProfile",

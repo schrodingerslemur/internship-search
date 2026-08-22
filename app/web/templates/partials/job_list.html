@@ -17,7 +17,15 @@
     </span>
   </div>
 
-  {% for job in page.jobs %}{% include "partials/job_card.html" %}{% endfor %}
+  {# One card per role, not per requisition. Employers advertise a single
+     opening as many reqs -- eleven of them, in the worst cases here -- and
+     they are all real jobs, so they are collapsed for reading rather than
+     merged away. Every sibling keeps its own link and its own state. #}
+  {% for group in group_jobs(page.jobs) %}
+    {% set job = group.lead %}
+    {% include "partials/job_card.html" %}
+    {% if group.is_group %}{% include "partials/job_group.html" %}{% endif %}
+  {% endfor %}
 
   {% if page.pages > 1 %}
   <nav class="actions pager" aria-label="Pagination">

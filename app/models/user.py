@@ -115,6 +115,23 @@ class UserJobState(Base, TimestampMixin):
     #: the same thing as having applied.
     opened_at: Mapped[datetime | None] = mapped_column(DateTime)
 
+    #: Why this job was dismissed, as one of ``DISMISS_REASONS``. Optional by
+    #: design -- triage must never be interrupted to collect it -- but without
+    #: it a dismissal is nearly unlearnable, because "no" could mean the role,
+    #: the location, the seniority, sponsorship, the employer or the timing,
+    #: and those imply opposite corrections to the ranking.
+    dismiss_reason: Mapped[str | None] = mapped_column(String(40), index=True)
+
+    #: The score this job carried at the moment of each decision. Applications
+    #: already snapshot this (``Application.score_at_apply``); saves and
+    #: dismissals need it for the same reason. Re-scoring rewrites
+    #: ``relevance_score`` in place, so without a snapshot every past decision
+    #: silently re-attributes itself to whatever the ranker believes today --
+    #: which makes it impossible to tell a ranking that improved from one that
+    #: merely moved.
+    score_at_save: Mapped[float | None] = mapped_column(Float)
+    score_at_dismiss: Mapped[float | None] = mapped_column(Float)
+
     user: Mapped[User] = relationship(back_populates="job_states")
     job: Mapped["Job"] = relationship()  # noqa: F821, UP037 - string ref: Job is in another module
 

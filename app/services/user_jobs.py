@@ -15,8 +15,11 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.logging_setup import get_logger
 from app.models import Job, User, UserJobState
 from app.models.base import JobStatus, utcnow
+
+log = get_logger("user_jobs")
 
 #: Statuses that mean the user has dealt with this job: it stops appearing in
 #: digests, but is never deleted -- the tracker is the record of what you did.
@@ -50,6 +53,25 @@ PROTECTED_FROM_EXPIRY: frozenset[str] = frozenset(
     }
 )
 
+
+#: The six things "no" can mean, as (code, label) pairs shown on the card.
+#:
+#: They are not interchangeable: "wrong location" argues for widening the
+#: location filter, "too senior" for tightening the seniority gate, and "not
+#: this company" for neither. A dismissal recorded without one of these is a
+#: data point that cannot be acted on, because every correction it might imply
+#: contradicts another. Six is the most that fits on one row of chips and still
+#: gets tapped; a seventh would be a dropdown, and a dropdown is a dialog.
+DISMISS_REASONS: tuple[tuple[str, str], ...] = (
+    ("wrong_role", "Wrong role"),
+    ("wrong_location", "Wrong location"),
+    ("too_senior", "Too senior"),
+    ("no_sponsorship", "Won't sponsor"),
+    ("not_this_company", "Not this company"),
+    ("bad_timing", "Bad timing"),
+)
+
+DISMISS_REASON_CODES: frozenset[str] = frozenset(code for code, _ in DISMISS_REASONS)
 
 def get_state(session: Session, user: User, job: Job | int) -> UserJobState | None:
     job_id = job if isinstance(job, int) else job.id
@@ -92,19 +114,59 @@ STATUS_TIMESTAMP: dict[str, str] = {
 }
 
 
-def stamp_status(state: UserJobState, status: str, now: datetime) -> None:
+def stamp_status(
+    state: UserJobState, status: str, now: datetime, job: Job | None = None
+) -> None:
     """Set the status and its arrival timestamp on an already-loaded row.
 
     Returning a job to NEW is a restore, and a restore must genuinely undo the
     dismissal: leaving ``dismissed_at`` set would keep the job in the Dismissed
     list forever, which is the one thing undo has to fix.
+
+    ``job`` is the row the score is snapshotted from when the state itself has
+    no per-user score yet. It is passed explicitly because the bulk path builds
+    state rows that have not been flushed, and an unflushed row's ``job``
+    relationship is empty -- so a bulk dismissal would silently record no score
+    at all, which is precisely the decision signal this exists to keep.
     """
     state.status = status
     if status == JobStatus.NEW.value:
+        # A restore undoes the dismissal completely, reason included: leaving
+        # one behind would teach the learning layers from a decision the user
+        # has explicitly taken back.
         state.dismissed_at = None
+        state.dismiss_reason = None
     field = STATUS_TIMESTAMP.get(status)
     if field and getattr(state, field, None) is None:
         setattr(state, field, now)
+    _snapshot_score(state, status, job)
+
+
+#: Which snapshot column each decision fills. Applications are snapshotted by
+#: the tracker (``Application.score_at_apply``); these are the two that were
+#: missing.
+SCORE_SNAPSHOT: dict[str, str] = {
+    JobStatus.SAVED.value: "score_at_save",
+    JobStatus.DISMISSED.value: "score_at_dismiss",
+}
+
+
+def _snapshot_score(state: UserJobState, status: str, job: Job | None = None) -> None:
+    """Freeze the score this decision was made against.
+
+    Written once and never overwritten: the question a snapshot answers is
+    "what did the ranker think when the user chose this", and re-saving a job
+    later does not change what it thought the first time.
+    """
+    field = SCORE_SNAPSHOT.get(status)
+    if not field or getattr(state, field, None) is not None:
+        return
+    score = state.relevance_score
+    if score is None:
+        source = job if job is not None else state.job
+        score = source.relevance_score if source is not None else None
+    if score is not None:
+        setattr(state, field, float(score))
 
 
 def set_status(
@@ -114,11 +176,39 @@ def set_status(
     status: str,
     *,
     now: datetime | None = None,
+    reason: str | None = None,
 ) -> UserJobState:
-    """Record what this user has decided about this job."""
+    """Record what this user has decided about this job.
+
+    ``reason`` is only meaningful for a dismissal and is always optional --
+    triage is never interrupted to collect it. An unrecognised code is dropped
+    rather than stored, so a stale form cannot poison the signal.
+    """
     now = now or utcnow()
     state = get_or_create_state(session, user, job)
-    stamp_status(state, status, now)
+    stamp_status(state, status, now, job)
+    if status == JobStatus.DISMISSED.value and reason in DISMISS_REASON_CODES:
+        state.dismiss_reason = reason
+    session.flush()
+    return state
+
+
+def set_dismiss_reason(
+    session: Session, user: User, job: Job, reason: str
+) -> UserJobState | None:
+    """Attach a reason to a dismissal that has already happened.
+
+    Separate from :func:`set_status` because the reason is collected *after*
+    the fact -- the chips appear in the undo toast, once the job is already
+    gone from the list. Recording it must not resurrect a state row for a job
+    that was never dismissed, so a missing row is left missing.
+    """
+    if reason not in DISMISS_REASON_CODES:
+        return None
+    state = get_state(session, user, job)
+    if state is None or state.status != JobStatus.DISMISSED.value:
+        return None
+    state.dismiss_reason = reason
     session.flush()
     return state
 
@@ -351,8 +441,61 @@ def bulk_set_status(
             session.add(state)
         if state.status == status:
             continue
-        stamp_status(state, status, now)
+        stamp_status(state, status, now, job)
         changed += 1
 
     session.flush()
     return changed
+
+
+#: How many rows of a feed count as "shown". The list is paginated well below
+#: this, so in practice it records the whole page; the cap exists so a future
+#: longer page cannot write an unbounded row.
+IMPRESSION_TOP_K = 50
+
+
+def record_impression(
+    session: Session,
+    user: User,
+    view: str,
+    jobs: list[Job],
+    *,
+    total_available: int | None = None,
+    now: datetime | None = None,
+) -> None:
+    """Log what this feed just put in front of the user.
+
+    Decisions alone have no denominator: they say what was chosen but not what
+    was on offer, and precision@k is undefined without both. This is the
+    cheapest possible record of the offer -- ranked ids and their scores at
+    display time, appended once per rendered feed.
+
+    Never allowed to break a page. Rendering the feed is the user's actual
+    goal; instrumenting it is not, so a failure here is swallowed rather than
+    turning a working list into a 500.
+    """
+    if not jobs:
+        return
+    from app.models import FeedImpression
+
+    top = jobs[:IMPRESSION_TOP_K]
+    states = states_for(session, user, [j.id for j in top])
+    try:
+        # A savepoint, not a bare try: a failed flush leaves the session
+        # unusable, and rolling the whole request back would discard the very
+        # decision the user just made in order to save a log line about it.
+        with session.begin_nested():
+            session.add(
+                FeedImpression(
+                    user_id=user.id,
+                    view=view,
+                    shown_at=now or utcnow(),
+                    job_ids=[j.id for j in top],
+                    scores=[score_of(states.get(j.id), j) for j in top],
+                    total_available=(
+                        total_available if total_available is not None else len(jobs)
+                    ),
+                )
+            )
+    except Exception:  # pragma: no cover - instrumentation must not break a page
+        log.warning("impression.not_recorded", user_id=user.id, view=view)

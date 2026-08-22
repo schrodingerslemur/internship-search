@@ -1,0 +1,41 @@
+{# The other requisitions for the role in the card above.
+
+   These are not duplicates. Each has its own requisition id and its own
+   application link -- employers simply post one opening once per location, or
+   once per cohort. Merging them would delete real jobs someone might want, so
+   they are collapsed for reading and nothing more: closed by default, every
+   one of them still reachable, still individually applicable.
+
+   The count sits on the summary rather than the card, so the feed never
+   claims a job it is not showing. #}
+<details class="group" id="group-{{ job.id }}">
+  <summary>
+    <span class="n">{{ group.others|length }} more opening{{ '' if group.others|length == 1 else 's' }}</span>
+    <span class="sub">same title at {{ job.company_name }}{% if group.locations|length > 1 %},
+      {{ group.locations|length }} locations{% endif %}</span>
+  </summary>
+
+  <ul class="group-list">
+    {% for sibling in group.others %}
+      <li>
+        {# Hidden, but real: a bulk decision taken on the card above has to
+           reach every requisition the card stands for, or "dismiss" would
+           clear one opening and leave three identical ones behind. Selection
+           is kept in step with the lead's checkbox by the script in base.html. #}
+        <input type="checkbox" class="job-pick group-pick" form="bulk-form"
+               name="job_ids" value="{{ sibling.id }}" data-lead="{{ job.id }}"
+               tabindex="-1" aria-hidden="true">
+        <span class="where">{{ sibling.location_raw or 'Location not listed' }}</span>
+        {% if sibling.requisition_id %}
+          <span class="req">Req {{ sibling.requisition_id }}</span>
+        {% endif %}
+        <span class="spacer"></span>
+        <a class="btn sm" href="/job/{{ sibling.id }}">Details</a>
+        <a class="btn sm" href="{{ sibling.application_url }}" target="_blank" rel="noopener"
+           data-record-open="/job/{{ sibling.id }}/opened"
+           data-record-view="{{ active_view|default('review') }}"
+           data-record-surface="feed">Apply <span aria-hidden="true">↗</span></a>
+      </li>
+    {% endfor %}
+  </ul>
+</details>
