@@ -217,6 +217,73 @@ def _cmd_rescore(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_llm_check(args: argparse.Namespace) -> int:
+    """Say whether the configured model actually answers, and how.
+
+    A model that is quietly unreachable looks exactly like one that is off, and
+    the pipeline degrades silently by design -- so there has to be one command
+    that asks out loud.
+    """
+    from app.config import get_settings
+    from app.pipeline.llm import LlmClient
+
+    settings = get_settings()
+    print(f"  endpoint : {settings.llm_base_url}")
+    print(f"  model    : {settings.llm_model}")
+    print(f"  enabled  : {settings.llm_enabled}")
+    print(f"  key      : {'set' if settings.llm_key else 'none (fine for a local model)'}")
+
+    with LlmClient(max_calls=2) as client:
+        ok, detail = client.health()
+    print("")
+    print(f"  {'OK' if ok else 'UNAVAILABLE'}: {detail}")
+    if not ok:
+        print("")
+        print("  For a free local model:")
+        print("    ollama pull qwen2.5:7b")
+        print("    LLM_ENABLED=true")
+        print("    LLM_BASE_URL=http://localhost:11434/v1")
+        print("    LLM_MODEL=qwen2.5:7b")
+        print("")
+        print("  For a free hosted one, point LLM_BASE_URL at Groq or")
+        print("  OpenRouter and set LLM_API_KEY.")
+    return 0 if ok else 1
+
+
+def _cmd_enrich(args: argparse.Namespace) -> int:
+    """Read postings the vocabulary could not, and store what the model found."""
+    from app.db import session_scope
+    from app.services import user_jobs
+    from app.services.enrichment import enrich_jobs
+    from app.services.preferences import all_active_users, load_preferences, load_profile
+
+    with session_scope() as session:
+        prefs = load_preferences(session)
+        report = enrich_jobs(session, prefs, limit=args.limit)
+
+        for line in report.errors[:5]:
+            print(f"  ! {line}")
+        print(
+            f"  {report.eligible} of {report.considered} active jobs needed reading; "
+            f"attempted {report.attempted}"
+        )
+        print(f"  {report.summary()}")
+        if report.failed:
+            print(f"  {report.failed} did not return usable JSON")
+
+        if args.rescore and report.enriched:
+            for user in all_active_users(session):
+                scored = user_jobs.rescore_all_for_user(
+                    session,
+                    user,
+                    load_preferences(session, user=user),
+                    load_profile(session, user=user),
+                )
+                print(f"  re-scored for {user.email or user.id}: {scored}")
+
+    return 0 if report.enriched or not report.eligible else 1
+
+
 async def _cmd_notify_test(args: argparse.Namespace) -> int:
     from app.db import session_scope
     from app.notify.engine import send_test_notification
@@ -315,6 +382,19 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("rescore", help="re-score every stored job (after a scoring change)")
 
+    sub.add_parser("llm-check", help="check the configured model answers")
+
+    p_enrich = sub.add_parser(
+        "enrich", help="read job descriptions with a language model to fill in skills"
+    )
+    p_enrich.add_argument(
+        "--limit", type=int, default=200, help="how many postings to read (default 200)"
+    )
+    p_enrich.add_argument(
+        "--rescore", action="store_true",
+        help="re-score every account afterwards, so the new facts reach the feed",
+    )
+
     p_pw = sub.add_parser("set-password", help="set an account password")
     p_pw.add_argument("--email", required=True)
     p_pw.add_argument("--password", default=None, help="omit to generate a strong one")
@@ -337,6 +417,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_set_password(args)
     if args.command == "rescore":
         return _cmd_rescore(args)
+    if args.command == "llm-check":
+        return _cmd_llm_check(args)
+    if args.command == "enrich":
+        return _cmd_enrich(args)
     if args.command == "stats":
         return _cmd_stats(args)
     if args.command == "serve":

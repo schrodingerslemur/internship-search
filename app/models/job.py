@@ -113,6 +113,19 @@ class Job(Base, TimestampMixin):
     score_breakdown: Mapped[dict] = mapped_column(JSON, default=dict)
     llm_assessment: Mapped[dict | None] = mapped_column(JSON)
 
+    # ---- Model-read facts ----
+    #: Structured facts a language model read out of the prose, kept separate
+    #: from the vocabulary-matched `skills` so the two are always tellable
+    #: apart: one is a regex hit, the other is a model's reading, and a user
+    #: deciding whether to trust a score deserves to know which.
+    enrichment: Mapped[dict | None] = mapped_column(JSON)
+    enriched_at: Mapped[datetime | None] = mapped_column(DateTime)
+    #: Which model produced it, so a bad batch can be found and re-run.
+    enrichment_model: Mapped[str | None] = mapped_column(String(120))
+    #: The content hash the enrichment was read from. When the posting changes,
+    #: the facts are stale and the job becomes eligible again.
+    enrichment_hash: Mapped[str | None] = mapped_column(String(64))
+
     # ---- Lifecycle ----
     status: Mapped[str] = mapped_column(String(30), default=JobStatus.NEW.value, index=True)
     freshness: Mapped[str] = mapped_column(String(20), default=Freshness.NEW.value, index=True)

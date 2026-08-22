@@ -70,6 +70,8 @@ class RunReport:
     boards_discovered: int = 0
     boards_crawled: int = 0
     llm_calls: int = 0
+    #: Postings a model read that the deterministic vocabulary could not.
+    jobs_enriched: int = 0
     notifications_sent: int = 0
     errors: list[str] = field(default_factory=list)
     outcomes: list[SourceOutcome] = field(default_factory=list)
@@ -294,10 +296,28 @@ async def run_search(
         report.updated_job_ids = persisted.updated_job_ids
         report.expired_jobs = expire_stale_jobs(session, run_id=report.run_id)
 
+        # Read the postings the vocabulary could not, before anybody is scored
+        # against them. Bounded by the same call budget as every other model
+        # stage, selected by role affinity, and entirely optional -- with no
+        # model configured this returns an empty report and changes nothing.
+        try:
+            from app.services.enrichment import enrich_jobs
+
+            enrichment = enrich_jobs(session, prefs, limit=llm.budget_left or 0)
+            report.jobs_enriched = enrichment.enriched
+            report.llm_calls += enrichment.attempted
+        except Exception:
+            log.exception("run.enrichment_failed")
+
         _record_run(session, report, outcomes)
         _update_source_records(session, outcomes)
 
-    log.info("run.persisted", new=report.new_jobs, updated=report.updated_jobs)
+    log.info(
+        "run.persisted",
+        new=report.new_jobs,
+        updated=report.updated_jobs,
+        enriched=report.jobs_enriched,
+    )
 
     # ---- notify ----
     if notify:

@@ -55,10 +55,24 @@ class Settings(BaseSettings):
     email_to: str | None = None
 
     # ---- LLM ----
-    anthropic_api_key: str | None = None
-    llm_model: str = "claude-sonnet-5"
+    #: Any OpenAI-compatible chat-completions endpoint. That covers Ollama
+    #: running locally (free, private, no key), Groq and OpenRouter's free
+    #: tiers, and the paid providers, through one code path -- switching is two
+    #: lines of .env rather than a rewrite.
+    #:
+    #:   Ollama      http://localhost:11434/v1        (no key needed)
+    #:   Groq        https://api.groq.com/openai/v1
+    #:   OpenRouter  https://openrouter.ai/api/v1
+    llm_base_url: str = "http://localhost:11434/v1"
+    llm_api_key: str | None = None
+    llm_model: str = "qwen2.5:7b"
     llm_enabled: bool = False
     llm_max_calls_per_run: int = 120
+    #: Seconds to wait on one completion. A local model on CPU is slow, and a
+    #: backfill that dies on the first timeout is worse than one that crawls.
+    llm_timeout_seconds: float = 120.0
+    #: Retained so an existing Anthropic key keeps working without editing .env.
+    anthropic_api_key: str | None = None
 
     # ---- Source credentials ----
     adzuna_app_id: str | None = None
@@ -113,9 +127,29 @@ class Settings(BaseSettings):
     # ---- Derived helpers ----
 
     @property
+    def llm_key(self) -> str | None:
+        """The credential to send, if any.
+
+        A locally-hosted model needs none, so an absent key is not an error --
+        it is the normal case for Ollama, and requiring one would rule out the
+        only genuinely free option.
+        """
+        return self.llm_api_key or self.anthropic_api_key
+
+    @property
+    def llm_is_local(self) -> bool:
+        host = (self.llm_base_url or "").lower()
+        return "localhost" in host or "127.0.0.1" in host or "host.docker.internal" in host
+
+    @property
     def llm_available(self) -> bool:
-        """LLM stages run only when explicitly enabled AND a key is present."""
-        return bool(self.llm_enabled and self.anthropic_api_key)
+        """LLM stages run only when explicitly enabled and reachable.
+
+        A remote endpoint needs a key; a local one does not.
+        """
+        if not self.llm_enabled or not self.llm_base_url:
+            return False
+        return self.llm_is_local or bool(self.llm_key)
 
     @property
     def telegram_available(self) -> bool:

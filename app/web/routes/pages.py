@@ -438,9 +438,44 @@ def coverage(
             "preferred_coverage": q.preferred_company_coverage(
                 db, load_preferences(db, user=user).companies.preferred
             ),
+            "llm": _llm_status(db),
             "counts": q.dashboard_counts(db, user),
         },
     )
+
+
+def _llm_status(db: Session) -> dict:
+    """Whether a model is configured, and how much of the corpus it has read.
+
+    Reported without calling out: a page load must not wait on an inference
+    endpoint. `internship-search llm-check` is the command that actually
+    probes it.
+    """
+    from sqlalchemy import func, select
+
+    from app.config import get_settings
+    from app.models import Job
+
+    settings = get_settings()
+    read = db.scalar(select(func.count(Job.id)).where(Job.enriched_at.is_not(None))) or 0
+    active = db.scalar(select(func.count(Job.id)).where(Job.is_active.is_(True))) or 0
+    thin = (
+        db.scalar(
+            select(func.count(Job.id)).where(
+                Job.is_active.is_(True), func.length(func.coalesce(Job.description, "")) < 40
+            )
+        )
+        or 0
+    )
+    return {
+        "configured": settings.llm_available,
+        "base_url": settings.llm_base_url,
+        "model": settings.llm_model,
+        "is_local": settings.llm_is_local,
+        "jobs_read": read,
+        "active": active,
+        "without_description": thin,
+    }
 
 
 @router.get("/analytics", response_class=HTMLResponse)

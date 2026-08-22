@@ -11,6 +11,37 @@
   <div class="note">A search was started in the background. Reload in a minute to see results.</div>
 {% endif %}
 
+{# Half of all crawled postings arrive with no description, and the skill
+   component of the score cannot be measured for any of them. A model reads the
+   ones whose titles already look relevant. This says whether that is switched
+   on and how far it has got. #}
+<h2>Reading job descriptions</h2>
+<div class="panel">
+  {% if llm.configured %}
+    <div class="note">
+      ✓ Using <strong>{{ llm.model }}</strong>
+      {% if llm.is_local %}on this machine{% else %}at {{ llm.base_url }}{% endif %}.
+      Read <strong>{{ llm.jobs_read }}</strong> posting{{ '' if llm.jobs_read == 1 else 's' }} so far.
+    </div>
+  {% else %}
+    <div class="note warn">
+      ⚠ No model configured, so <strong>{{ llm.without_description }}</strong> of
+      {{ llm.active }} active postings have no readable description and cannot be
+      scored on skills at all &mdash; that quarter of the score is simply left out
+      for them.
+      <div class="help" style="margin-top:8px">
+        A local model is free and nothing leaves this machine:
+        <span class="mono">ollama pull qwen2.5:7b</span>, then set
+        <span class="mono">LLM_ENABLED=true</span>,
+        <span class="mono">LLM_BASE_URL=http://localhost:11434/v1</span>,
+        <span class="mono">LLM_MODEL=qwen2.5:7b</span>.
+        Check it with <span class="mono">internship-search llm-check</span> and run
+        <span class="mono">internship-search enrich --rescore</span>.
+      </div>
+    </div>
+  {% endif %}
+</div>
+
 {# The gap nothing else reports: a company you named that the crawl is not
    reaching. Without this the ranking looks healthy while the employer you most
    wanted is simply absent, and "not hiring" cannot be told from "never
