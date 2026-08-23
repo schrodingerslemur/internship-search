@@ -545,6 +545,37 @@ RELEVANCE_COMPONENTS: tuple[str, ...] = ("role_match", "technical_skills")
 #: relevant job, not halve it.
 CONTEXT_FLOOR = 0.70
 
+#: What a relevance score is worth when half the relevance evidence is missing.
+#:
+#: Dropping an unmeasured component from the blend is right -- an invented
+#: midpoint would let the crawler's luck outvote the candidate's fit -- but on
+#: its own it made *absence of evidence* free. A posting with no description
+#: has only ``role_match`` to go on, that one component then carries the whole
+#: relevance group, and a title alone could score 100.
+#:
+#: The effect was not theoretical: AMD's "Hardware Engineer Intern/Co-op",
+#: crawled from a list with no description at all, scored 96.1 and outranked
+#: AMD's own "2027 Masters Hardware Engineering" at 94.6 -- a posting whose
+#: 3,900 words had been read and found to name verilog, vhdl, asic and jtag.
+#: The one nothing was known about beat the one verified as an excellent match.
+#:
+#: So a score built on less evidence is worth slightly less, and says so. This
+#: is a confidence discount, not a penalty: the posting has done nothing wrong,
+#: and a strong title still ranks well above a weak one. It only means that
+#: "looks right, and we checked" outranks "looks right".
+EVIDENCE_DISCOUNT = 0.93
+
+
+def _evidence_factor(measured: dict[str, ComponentScore]) -> float:
+    """How much to trust a relevance score built on incomplete evidence.
+
+    One factor per missing relevance component, so a posting judged on its
+    title alone is discounted once and a posting judged on nothing is not
+    reachable here at all. See :data:`EVIDENCE_DISCOUNT`.
+    """
+    missing = sum(1 for name in RELEVANCE_COMPONENTS if name not in measured)
+    return EVIDENCE_DISCOUNT**missing
+
 
 def _blend(components: dict[str, ComponentScore], weights: dict[str, float]) -> float:
     """Combine components so context modulates relevance rather than replacing it.
@@ -588,7 +619,7 @@ def _blend(components: dict[str, ComponentScore], weights: dict[str, float]) -> 
     relevance = (
         sum(measured[name].weighted for name in RELEVANCE_COMPONENTS if name in measured)
         / relevance_weight
-    )
+    ) * _evidence_factor(measured)
     if context_weight <= 0:
         return relevance
 

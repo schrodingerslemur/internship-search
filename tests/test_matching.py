@@ -388,3 +388,64 @@ class TestRelevanceGating:
         prefs.weights.technical_skills = 0.0
         score = self._score(prefs, profile, title="Marketing Intern", location="Pittsburgh, PA")
         assert score > 0, "zeroing relevance must not zero every job"
+
+
+class TestEvidenceDiscount:
+    """A score built on less evidence is worth slightly less, and says so.
+
+    Dropping an unmeasured component from the blend is right -- an invented
+    midpoint would let the crawler's luck outvote the candidate's fit -- but on
+    its own it made absence of evidence free. A posting with no description has
+    only its title to go on, so that one component carried the whole relevance
+    group and a title alone could score 100.
+    """
+
+    def test_a_verified_match_outranks_a_title_that_merely_looks_right(
+        self, prefs, profile
+    ):
+        """The case this exists for. AMD's own listings, from two sources: one
+        crawled with 3,900 words naming verilog, vhdl, asic and jtag, and one
+        from a list with no description at all. The second used to win."""
+        read = score(
+            make_raw(title="Hardware Engineer Intern", description=FPGA_DESCRIPTION),
+            prefs,
+            profile,
+        )
+        unread = score(
+            make_raw(title="Hardware Engineer Intern", description=None), prefs, profile
+        )
+        assert read.score > unread.score
+
+    def test_a_posting_we_read_is_scored_exactly_as_before(self, prefs, profile):
+        """The discount must not touch the jobs that carry real evidence --
+        it is about what is missing, not about being stricter."""
+        from app.pipeline.match import EVIDENCE_DISCOUNT, _evidence_factor
+
+        result = score(
+            make_raw(title="FPGA Engineer Intern", description=FPGA_DESCRIPTION),
+            prefs,
+            profile,
+        )
+        breakdown = result.breakdown()
+        assert breakdown["technical_skills"]["measured"] is True
+        assert _evidence_factor({"role_match": None, "technical_skills": None}) == 1.0
+        assert EVIDENCE_DISCOUNT < 1.0
+
+    def test_a_title_only_posting_still_ranks_well(self, prefs, profile):
+        """A confidence discount, not a penalty: the posting has done nothing
+        wrong and a strong title still beats a weak one."""
+        strong = score(make_raw(title="FPGA Engineer Intern", description=None), prefs, profile)
+        weak = score(make_raw(title="Marketing Intern", description=None), prefs, profile)
+        assert strong.score > weak.score
+        assert strong.score >= 60
+
+    def test_the_discount_applies_once_per_missing_component(self, prefs, profile):
+        from app.pipeline.match import EVIDENCE_DISCOUNT, _evidence_factor
+
+        assert _evidence_factor({"role_match": None}) == pytest.approx(EVIDENCE_DISCOUNT)
+        assert _evidence_factor({}) == pytest.approx(EVIDENCE_DISCOUNT**2)
+
+    def test_missing_evidence_is_still_reported_as_a_concern(self, prefs, profile):
+        """The discount is silent arithmetic; the reason has to stay visible."""
+        result = score(make_raw(title="FPGA Engineer Intern", description=None), prefs, profile)
+        assert any("no description" in c.lower() for c in result.concerns)
