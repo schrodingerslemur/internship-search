@@ -1,243 +1,197 @@
 # What to do next
 
-Written 22 Aug 2026, after the ranking rewrite landed on `main` (`d89dcbe`).
-Every number below is measured against `data/internship.db` as of that date —
-5,134 active jobs, one account.
+Updated 23 Aug 2026, after working through the previous version of this plan.
+Numbers are measured against `data/internship.db` — 5,262 active jobs, one
+account.
 
 ---
 
 ## Where things stand
 
-The ranker was rewritten and the corpus re-scored. The funnel is usable again:
-
-| Band | Threshold | Jobs | Before the rewrite |
+| Band | Threshold | Jobs | Two plans ago |
 |---|---|---|---|
-| 🔥 Apply now | ≥ 90 | 3 | 1 |
-| ⭐ Strong match | ≥ 80 | 41 | 3 |
-| 👍 Worth considering | ≥ 70 | 66 | 44 |
-| 🟡 Maybe | ≥ 60 | 30 | 256 |
-| Skip | < 60 | 4,994 | 4,830 |
+| 🔥 Apply now | ≥ 85 | 29 | 3 |
+| ⭐ Strong match | ≥ 75 | 61 | 41 |
+| 👍 Worth considering | ≥ 70 | 47 | 66 |
+| 🟡 Maybe | ≥ 60 | 31 | 30 |
+| Skip | < 60 | 5,094 | 4,994 |
 
-110 jobs now clear 70, against 48 before. That is the number that matters — it
-is the size of the pile actually worth reading.
+The top ten are all AMD and NVIDIA hardware internships. That is the intended
+shape, and it is the first time it has been true.
 
-**Three things are built but not yet doing anything:**
+**Three corrections to the previous plan, all worth recording:**
 
-1. **Enrichment has never run.** `LLM_ENABLED` is false and no model is
-   configured, so 0 postings have been read. 2,626 active jobs still have no
-   description and score nothing on skills.
-2. **Board yield is unpopulated.** The bookkeeping fix landed, but the last
-   crawl was 19 Aug — before it existed. All 615 boards still report 0.
-3. **The deployed instance has not been migrated or re-scored.** Only the local
-   database is on the new scale.
-
----
-
-## 1. Land what already exists
-
-**Nothing new gets built until the work already on `main` is actually running.**
-
-### 1a. Deploy
-
-```bash
-# migration f5a6b7c8d9e0 adds the four enrichment columns
-alembic upgrade head
-internship-search rescore
-```
-
-`docker-entrypoint.sh` should run the migration, but that path has only ever
-been exercised locally. The rescore is not optional: a corpus split across two
-scoring generations makes every threshold meaningless, which is the exact
-failure the rewrite was fixing.
-
-**Verify:** the deployed feed's top card is a hardware internship, and
-`/coverage` reports the same run counts as local.
-
-### 1b. Run a crawl
-
-The last one was three days ago, and it predates every change. It is also the
-only way to populate board yield.
-
-```bash
-internship-search search --trigger manual
-```
-
-**Verify:** `ats_boards.jobs_last_crawl > 0` for a reasonable share of boards.
-Any board that succeeds and returns zero is now visible, which is what the
-AMD gap needs.
-
-**Watch for:** the scheduler may not be running at all — nothing has run since
-19 Aug despite being configured for twice daily. If the crawl only happens when
-triggered by hand, that is a separate bug worth chasing.
+- **The scheduler was never broken.** It runs in GitHub Actions every three
+  hours and has been succeeding continuously. What looked like a dead scheduler
+  was the *local* database being a different database from the deployed one.
+- **AMD is not on Workday.** Its careers site is Phenom People, which is why
+  every guessed Workday tenant returned 422.
+- **Enrichment does not simply raise scores.** Measured over 112 postings: 25
+  went up, 22 went down, mean −2.1. See below — the drops are the point.
 
 ---
 
-## 2. Turn on the model
+## Done
 
-This is the highest-value unproven work. It is written, tested against a stub,
-and has produced exactly **zero real inferences**.
+**Board yield populated.** 664 boards crawled, 443 yielding, 220 succeeding but
+returning nothing — that last number was invisible before.
 
-```bash
-ollama pull qwen2.5:7b
-# .env
-LLM_ENABLED=true
-LLM_BASE_URL=http://localhost:11434/v1
-LLM_MODEL=qwen2.5:7b
+**The AMD gap is closed.** A `phenom` source, AMD registered as a curated board,
+and `seed_curated_boards` at the head of every crawl so a board added in a
+release reaches an already-seeded database. **AMD: 1 job → 43.**
 
-internship-search llm-check          # proves the endpoint answers
-internship-search enrich --limit 20  # small batch first, read the output
-internship-search enrich --rescore   # full pass: ~322 calls
-```
+**Workable was entirely dead.** It sends `department` as a list; the schema
+wants a string. The validation error killed the posting, then the board, then
+every board, then the source, reported only as `[FAIL] workable 0`.
 
-Start at `--limit 20` and **actually read what it extracted** before running the
-full pass. The selector picks 322 of 5,134 jobs (6.3%), so a full pass is cheap,
-but a 7B model writing plausible nonsense into 322 job records is not something
-to discover afterwards.
+**Decision signal is captured** (migration `a6b7c8d9e0f1`): one-tap dismissal
+reasons in the undo toast, score snapshots on save and dismiss, and a
+`feed_impressions` log of what each feed showed. None of it is retroactive,
+which is why it landed before the layers that consume it.
 
-**Verify:** pick five enriched jobs, compare `enrichment.skills` against the
-posting text by eye. Then check the ranking moved sensibly — not just that it
-moved.
+**The feed says a role once.** 318 (company, title) groups were costing 525
+extra cards, collapsed presentationally with every requisition still linked and
+individually applicable.
 
-**Honest risk:** the projected benefit is unmeasured. 63% of postings yield no
-skills today, but the ones the selector picks are the ones whose titles already
-match, and those may already score well on `role_match` alone. The lift could be
-smaller than the plan implies. Measure it before committing to a hosted model or
-a scheduled backfill.
+**Thresholds set to 85 / 75**, and re-checked after enrichment: the boundaries
+barely moved (30 at ≥85, 90 at ≥75, both within one of their pre-enrichment
+values), because enrichment redistributes within the corpus rather than
+shifting its shape.
 
-**If the local model is too slow or too poor:** point `LLM_BASE_URL` at Groq's
-free tier with a `LLM_API_KEY`. Same code path, bigger model, rate-limited.
+**The model is on**, and turning it on found five bugs a stub could not:
 
----
+1. `.env` named an Anthropic model against Ollama's base URL — a combination
+   nothing could answer. That is why enrichment had produced zero inferences.
+2. Reasoning models spend the answer's token ceiling *thinking first*, so the
+   32-token health probe and 700-token extraction budget were consumed before
+   any JSON appeared. It surfaces as `"failed_generation": ""`, which looks
+   nothing like a token limit.
+3. 429 was treated as failure — reported as "did not return usable JSON", a
+   much more alarming problem, *and* already charged to the run budget.
+4. The backfill held every posting in one transaction and committed at the end.
+   An interruption discarded every posting already read along with the quota
+   spent on it. It did, and about a hundred postings went with it.
+5. One extraction in six failed on long postings for reason (2) again; those
+   are now retried with three times the room, rather than raising the ceiling
+   for everything — the requested ceiling counts against the per-minute rate
+   limit whether or not it is used.
 
-## 3. Recalibrate thresholds — but *after* step 2, not before
+### What enrichment actually bought
 
-The distribution has room to move:
+Over the 112 postings read so far:
 
-```
-≥90:   3     ≥75:  76
-≥85:  19     ≥70: 110
-≥80:  44     ≥65: 124
-```
-
-Three jobs at "apply now" makes a thin headline. Dropping `apply_now` to 85 and
-`strong_match` to 75 would give 19 and 76 — a more usable shape.
-
-**But do not touch these yet.** Enrichment changes scores for exactly the jobs
-near the top, so tuning now means tuning twice and having no idea which change
-did what. Re-read the distribution after step 2 and set the thresholds once.
-
----
-
-## 4. Fix the AMD gap
-
-AMD has **one** active job and it is not an internship. For comparison:
-
-| Company | Jobs | Internships |
+| | Before | After |
 |---|---|---|
-| NVIDIA | 32 | 32 |
-| Apple | 13 | 13 |
-| Microsoft | 10 | 10 |
-| Google | 5 | 5 |
-| **AMD** | **1** | **1** |
+| Average skills per posting | 2.8 | **16.2** |
+| Postings scoring *zero* on skills | 27% | 0 |
+| Extracted skills appearing verbatim in the posting | — | **97.6%** |
 
-So it is not a systemic board problem — it is AMD specifically. No ranking change
-can surface a job that was never crawled.
+The score movement is the interesting part, and it is not what the previous
+plan assumed. **Epia Neuro's "Hardware Engineer Intern" fell from 84.8 to
+40.9.** It had no extractable skills, so `technical_skills` was *unmeasured* and
+silently dropped out of the weighted average — the posting scored 84.8 on its
+title alone. Reading it found `solidworks, fdm 3d printing, hand tools, drill
+press, sanding, filing, adhesives`: a mechanical fabrication internship with no
+overlap with an FPGA/RTL profile. Three more sat at ~84 for the same reason.
 
-Find AMD's real Workday tenant and site identifier from a live posting URL, then
-register the board. The `/coverage` page now warns about preferred companies
-with no internships, so this class of gap reports itself from here on.
+Going the other way, Astera Labs' Firmware Engineer Intern rose 35.5 → 69.7 on
+`c, c++, python, git, ci, jtag`, and DRW's FPGA Intern 50.4 → 72.9 on
+`system verilog, verilog, vhdl`.
 
-**Also worth checking while in there:** Google at 5 and Microsoft at 10 look low
-for employers that run hundreds of intern reqs. They may be paginating, or the
-title gate may be dropping them.
-
----
-
-## 5. Start capturing decision signal
-
-From `LEARNING-LOOP` (artifact): you have **1 application, 0 saves, 0 dismissals,
-0 recorded apply-clicks**. Nothing can learn from that, and signal not captured
-now is gone.
-
-This is the only part of the learning plan worth building before there is data,
-because everything else depends on it.
-
-- **One-tap dismissal reasons.** Wrong role · Wrong location · Too senior ·
-  Won't sponsor · Not this company · Bad timing. Optional, one tap, never a
-  dialog that interrupts triage. A dismissal without a reason is nearly
-  unlearnable — it could mean any of six things that imply opposite preference
-  changes.
-- **Snapshot the score on save and dismiss**, not just on apply.
-  `Application.score_at_apply` already does this for applications (2 of 2
-  populated); the other two decisions need the same.
-- **Log what was shown.** Top-*k* job ids per feed impression. Without a
-  denominator there is no precision@k, and precision@k is the only honest
-  measure of whether any of this is working.
-
-Small schema change, a chip row on the card. Do it before the learning layers,
-not with them.
+So enrichment is not a boost, it is a **correction**: it takes away scores that
+were never earned and gives them to postings the vocabulary could not read. An
+unmeasured component quietly inflating a score is worth looking at on its own
+terms — it is currently the most generous thing the scorer does.
 
 ---
 
-## 6. Feed clutter
+## 1. Finish the backfill — 112 of 332, and it needs several days
 
-**320 `(company, title)` groups have more than one card in the review feed.**
-These are not duplicates — I checked requisition IDs, and they are genuinely
-separate openings sharing one boilerplate description. GE Healthcare advertises
-11 distinct "Graduate Engineer Trainee" reqs; Texas A&M 14 work-study reqs.
-Merging them would delete real jobs.
+Groq's free tier is **8,000 tokens/minute and 200,000 tokens/day**, and the
+daily cap is **per model**, not per account. All three usable models are spent
+for today.
 
-The fix is presentational: collapse same-employer, same-title postings into one
-card that expands to show the individual reqs. Roughly the same shape as the
-existing "Merged from N listings" badge, but for jobs that were correctly *not*
-merged.
+```bash
+internship-search enrich --limit 400   # resumes where it stopped; safe to interrupt
+```
 
-Lower priority than everything above — it is noise, not wrongness.
+Re-run daily until it reports no remaining eligible postings. Rotating
+`LLM_MODEL` between `openai/gpt-oss-20b`, `qwen/qwen3.6-27b` and
+`openai/gpt-oss-120b` gets three daily allowances instead of one.
 
----
+Cost per posting varies more than the model sizes suggest: `gpt-oss-20b` uses
+about 500 tokens, `gpt-oss-120b` about 2,000, and `qwen3.6-27b` burns ~970
+tokens *thinking* before it answers. **`gpt-oss-20b` is both the cheapest and
+the best of the three here** — 166 of 170 of its extracted skills appear
+verbatim in the posting, cleanly lowercased.
 
-## 7. Learning layers 1–3
+**Then re-read the distribution once more.** The thresholds are set on a corpus
+that is 34% enriched.
 
-Deferred until step 5 has produced ~30 decisions. Full design in the
-**Learning From Your Decisions** artifact. Summary of the order:
+## 2. Enrichment only runs locally
 
-- **Layer 1** — smoothed log-odds per feature over applied vs dismissed. No
-  model. Gated on a confidence floor, emits *proposals* rather than mutating
-  scores.
-- **Layer 3** — the proposal review queue. Ship with Layer 1; a proposal with
-  nowhere to land is not useful.
-- **Layer 2b/2c** — weekly model call to name the pattern and expand role
-  vocabulary. Needs ~100 decisions before it is summarising anything real.
+The GitHub Actions workflow configures no LLM, so the deployed instance enriches
+nothing. Either add `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_ENABLED` as repository
+secrets, or accept that enrichment is a local backfill and that only its
+*results* reach production, through the shared database.
 
-The constraint that matters most is in that artifact and bears repeating here:
-**never let a learned preference drive a hard filter.** A filter removes a job
-from the feed, which removes it from the evidence, which closes the loop
-permanently — and the loop would have closed around a ranker that was badly
-wrong until this week.
+## 3. Google, Microsoft and Apple have the same gap AMD had
+
+Checked, as the previous plan asked. It is **not** pagination and **not** the
+title gate:
+
+| Company | Registered boards | Jobs | Only source |
+|---|---|---|---|
+| Google | **0** | 5 | `github_lists` |
+| Microsoft | **0** | 12 | `github_lists` |
+| Apple | **0** | 13 | `github_lists` |
+| NVIDIA | 1 (workday) | 37 | workday + lists |
+
+Every one of their jobs arrives second-hand from curated lists. None answers a
+trivially-guessable endpoint — Microsoft's `gcsservices` search returned empty,
+Apple's redirects, Google's 404s — so each needs its own adapter, the way
+Phenom did. Real work, not a registration.
+
+## 4. Learning layers 1–3
+
+Still gated on **~30 decisions** existing; there are 2 applications, 0 dismissal
+reasons and 2 impressions on record. The capture is in place, so this waits on
+use rather than on code. Full design in the **Learning From Your Decisions**
+artifact.
+
+The constraint that matters most bears repeating: **never let a learned
+preference drive a hard filter.** A filter removes a job from the feed, which
+removes it from the evidence, which closes the loop permanently.
 
 ---
 
 ## Open questions
 
-- **Is the scheduler running?** Nothing has crawled since 19 Aug. Either it is
-  not started in the deployed process, or it is failing silently.
-- **Notifications are off.** The channel guard disabled them because Telegram
-  has no bot token. Either finish the Telegram setup or switch to email — until
-  then the digest does nothing regardless of how good the ranking is.
+- **Should an unmeasured component really be free?** Excluding
+  `technical_skills` from the weighted average when nothing was extracted is
+  what let a 3D-printing internship reach 84.8. Enrichment fixes this one
+  posting at a time; the scoring rule behind it is untouched and applies to
+  2,660 active jobs that still have no description at all.
 - **Does `role_affinity` need per-role tuning?** "Hardware Verification Intern"
   scores ~65 because it shares one meaningful token with each of two roles.
-  Adding it as an explicit role fixes it, which may be the right answer rather
-  than more clever matching.
-- **`MIN_ROLE_AFFINITY = 0.35` is a guess.** It picks 6.3% of the corpus for
-  enrichment. If the model turns out to be cheap and useful, lowering it widens
-  the net.
+- **`MIN_ROLE_AFFINITY = 0.35` is still a guess** — it selects 332 of 5,262
+  (6.3%). Lowering it widens the net, at a daily quota that is already the
+  binding constraint.
+- **`feed_impressions` grows one row per feed render.** Fine for one user;
+  worth a retention sweep before it is ever multi-user.
+- **AMD appears under two display names** — both correctly resolve to one
+  company row, so ranking and grouping are unaffected. Cosmetic only.
 
 ## Explicitly not doing
 
-- **Scoring jobs with an LLM.** Slow, non-deterministic, unexplainable, and
-  unnecessary now the deterministic scorer works. The model's output belongs in
-  a field the scorer reads, or a proposal you approve — never in a score.
-- **Merging the 315 same-title/different-requisition postings.** They are real,
-  separate jobs. Group them in the UI instead.
+- **Scoring jobs with an LLM.** Unchanged, and the reason
+  `scope.llm_semantic_matching` is deliberately still off: it feeds a model
+  assessment into the score. The model's output belongs in a field the scorer
+  reads, or a proposal you approve — never in a score. Enrichment is exactly
+  that shape, and the Epia Neuro correction is what it looks like working.
+- **`scope.llm_dedup_adjudication`, for now.** Not a rejection: it shares the
+  per-run call budget with enrichment, which is already quota-bound.
+- **Merging the same-title/different-requisition postings.** They are real,
+  separate jobs. Grouped in the UI instead — done.
 - **Auto-applying learned preference changes.** Not until several proposals have
   been accepted without regret, and never for hard filters.
