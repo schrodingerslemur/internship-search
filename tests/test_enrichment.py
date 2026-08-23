@@ -559,3 +559,51 @@ class TestABackfillKeepsWhatItAlreadyRead:
         client = stub_client(lambda r: completion(json.dumps(GOOD_FACTS)), max_calls=5)
         enrich_jobs(session, prefs, limit=5, client=client)
         assert committed["n"] == 0
+
+    def test_a_model_that_never_reached_the_answer_is_given_more_room(self):
+        """The provider validates the empty string against the requested JSON
+        shape and reports invalid JSON -- which reads like a prompt problem and
+        is really the reasoning budget running out on a long posting."""
+        seen: list[int] = []
+
+        def handler(request):
+            body = json.loads(request.content)
+            seen.append(body["max_completion_tokens"])
+            if len(seen) == 1:
+                return httpx.Response(400, json={"error": {
+                    "message": "Failed to validate JSON. Please adjust your prompt.",
+                    "code": "json_validate_failed",
+                    "failed_generation": "",
+                }})
+            return completion(json.dumps(GOOD_FACTS))
+
+        client = stub_client(handler)
+        assert client.extract_facts(normalized_from_job_row(make_job())) is not None
+        assert len(seen) == 2
+        assert seen[1] > seen[0], "the retry has to be given more room than the attempt that failed"
+
+    def test_the_retry_costs_one_call_not_two(self):
+        def handler(request):
+            return httpx.Response(400, json={"error": {
+                "code": "json_validate_failed", "failed_generation": "",
+            }})
+
+        client = stub_client(handler, max_calls=5)
+        client.extract_facts(normalized_from_job_row(make_job()))
+        assert client.calls == 1
+
+    def test_a_model_that_answered_badly_is_not_retried(self):
+        """A non-empty generation means it got there and was wrong. More room
+        buys nothing, and spending it twice is how quota disappears."""
+        seen: list[int] = []
+
+        def handler(request):
+            seen.append(json.loads(request.content)["max_completion_tokens"])
+            return httpx.Response(400, json={"error": {
+                "code": "json_validate_failed",
+                "failed_generation": "{not actually json",
+            }})
+
+        client = stub_client(handler)
+        assert client.extract_facts(normalized_from_job_row(make_job())) is None
+        assert len(seen) == 1

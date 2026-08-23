@@ -100,6 +100,25 @@ DAILY_LIMIT_MARKERS: tuple[str, ...] = (
 RECOVERABLE_LIMIT_MARKERS: tuple[str, ...] = ("per minute", "(tpm)", "(rpm)", "per_minute")
 
 
+#: How much more room a posting gets on the second attempt, when the first
+#: ended with the model still thinking.
+LONG_POSTING_MULTIPLIER = 3
+
+
+def _ran_out_of_room(response: httpx.Response) -> bool:
+    """Whether this failure is "the model never got to the answer".
+
+    The provider cannot say so directly -- it validated an empty string against
+    the requested JSON shape and reported invalid JSON, which reads like a
+    prompt problem and is really a budget one. The empty generation is what
+    distinguishes it from a model that genuinely answered badly.
+    """
+    if response.status_code != 400:
+        return False
+    body = (response.text or "").lower()
+    return "json_validate_failed" in body and '"failed_generation":""' in body.replace(" ", "")
+
+
 def _is_exhausted(response: httpx.Response) -> bool:
     """Whether this 429 means "come back tomorrow" rather than "slow down"."""
     body = (response.text or "").lower()[:600]
@@ -211,6 +230,24 @@ class LlmClient:
             response = self._wait_out_rate_limit(body)
             if response is None:
                 return None
+            if _ran_out_of_room(response):
+                # The headroom covers a typical posting. A long one leaves the
+                # model still thinking when the ceiling arrives, and it stops
+                # mid-thought having written nothing -- which the provider
+                # reports as invalid JSON rather than as a token limit.
+                #
+                # Retried rather than simply given a bigger ceiling for
+                # everything, because the requested ceiling counts against the
+                # per-minute rate limit whether or not it is used: raising it
+                # across the board would halve throughput to rescue the one
+                # call in six that needs it.
+                body["max_tokens"] = body["max_completion_tokens"] = int(
+                    ceiling * LONG_POSTING_MULTIPLIER
+                )
+                log.info("llm.retry_with_more_room", model=self.model, ceiling=body["max_tokens"])
+                response = self._wait_out_rate_limit(body)
+                if response is None:
+                    return None
             if response.status_code >= 400:
                 log.warning(
                     "llm.http_error",
