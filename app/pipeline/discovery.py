@@ -266,27 +266,39 @@ def seed_curated_boards(session: Session) -> int:
 
     Most providers expose a token derivable from the company name, so a wrong
     guess is free and :func:`seed_boards_for_companies` can brute-force them.
-    Phenom does not: its host is an arbitrary careers domain, so a tenant that
-    is never linked from a crawled posting stays invisible forever. AMD sat in
-    that hole -- a preferred employer whose 44 internships were unreachable
-    because nothing in the corpus pointed at ``careers.amd.com``.
+    Several cannot be guessed at all: a Phenom or Eightfold tenant is reached
+    through an arbitrary careers domain, and Apple and Google each run one
+    bespoke site. A company on any of those stays invisible forever unless it
+    is written down, which is how four preferred employers between them
+    accounted for 31 jobs while NVIDIA alone had 37.
 
     Idempotent, so it is safe to call at the head of every run rather than only
     at first boot: an existing database has already passed the seeding step and
     would otherwise never pick up a board added in a later release.
     """
-    from app.sources.ats.phenom import CURATED_BOARDS
+    from app.sources.ats import bigtech, eightfold, phenom
 
-    entries = {
-        f"phenom:{token}": {
-            "provider": "phenom",
+    entries: dict[str, dict] = {}
+
+    def add(provider: str, token: str, spec: dict) -> None:
+        extra = {k: v for k, v in spec.items() if k in ("host", "domain")}
+        entries[f"{provider}:{token}"] = {
+            "provider": spec.get("provider", provider),
             "board_token": token,
             "company_name": spec["company_name"],
-            "extra": {"host": spec["host"]},
+            "extra": extra,
             "discovered_via": "curated",
         }
-        for token, spec in CURATED_BOARDS.items()
-    }
+
+    for token, spec in phenom.CURATED_BOARDS.items():
+        add("phenom", token, spec)
+    for token, spec in eightfold.CURATED_BOARDS.items():
+        add("eightfold", token, spec)
+    for token, spec in bigtech.CURATED_BOARDS.items():
+        # These carry their own provider: the two live on different platforms
+        # and only share a table because neither needed a module of its own.
+        add(spec["provider"], token, spec)
+
     return register_boards(session, entries)
 
 

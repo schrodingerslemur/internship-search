@@ -29,6 +29,25 @@ from app.sources.http import FetchError, HttpClient
 log = get_logger("source")
 
 
+def first_text(value: Any) -> str | None:
+    """One label, whatever shape the provider used to send it.
+
+    Providers are inconsistent about single-valued fields: Workable sends
+    ``department`` as a list, Eightfold sends ``employment_type`` as one,
+    Phenom sends ``category`` as a padded list, and all three sometimes send a
+    bare string or a ``false``. The schema wants a string, and passing a list
+    straight through raises inside ``make_job`` -- which fails the posting,
+    then the board, then every board, then the source. An optional label is
+    not worth losing a source over, and this has now cost two of them.
+    """
+    if isinstance(value, (list, tuple)):
+        value = next((v for v in value if v), None)
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 @dataclass
 class SearchQuery:
     """One generated search request."""

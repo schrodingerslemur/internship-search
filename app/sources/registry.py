@@ -7,6 +7,8 @@ and append it to :data:`ALL_SOURCE_CLASSES`.
 from __future__ import annotations
 
 from app.sources.ats.ashby import AshbySource
+from app.sources.ats.bigtech import AppleJobsSource, GoogleCareersSource
+from app.sources.ats.eightfold import EightfoldSource
 from app.sources.ats.greenhouse import GreenhouseSource
 from app.sources.ats.lever import LeverSource
 from app.sources.ats.misc_ats import (
@@ -41,6 +43,9 @@ ALL_SOURCE_CLASSES: tuple[type[JobSource], ...] = (
     RecruiteeSource,
     WorkdaySource,
     PhenomSource,
+    EightfoldSource,
+    AppleJobsSource,
+    GoogleCareersSource,
     # Free public boards.
     TheMuseSource,
     RemotiveSource,

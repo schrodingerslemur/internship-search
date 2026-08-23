@@ -26,7 +26,7 @@ from app.logging_setup import get_logger
 from app.models.base import SourceKind
 from app.pipeline.extract import parse_date
 from app.schemas.job import RawJob
-from app.sources.base import BoardJobSource, SourceContext
+from app.sources.base import BoardJobSource, SourceContext, first_text
 from app.sources.http import FetchError
 
 log = get_logger("phenom")
@@ -124,7 +124,7 @@ class PhenomSource(BoardJobSource):
                     date_posted=parse_date(data.get("posted_date") or data.get("create_date")),
                     date_updated=parse_date(data.get("update_date")),
                     requisition_id=str(req_id),
-                    department=data.get("department") or _first(data.get("category")),
+                    department=data.get("department") or first_text(data.get("category")),
                     raw={"req_id": req_id, "board": token, "host": host},
                 )
             )
@@ -164,16 +164,6 @@ class PhenomSource(BoardJobSource):
 
             if added == 0 or len(rows) < PAGE_SIZE:
                 return
-
-
-def _first(value: Any) -> str | None:
-    """Phenom reports ``category`` as a list, sometimes with padded strings."""
-    if isinstance(value, list):
-        for item in value:
-            if item and str(item).strip():
-                return str(item).strip()
-        return None
-    return str(value).strip() if value else None
 
 
 #: Phenom tenants worth crawling, keyed by board token (the tenant's own
