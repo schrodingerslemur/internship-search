@@ -268,7 +268,11 @@ def _cmd_enrich(args: argparse.Namespace) -> int:
 
     with session_scope() as session:
         prefs = load_preferences(session)
-        report = enrich_jobs(session, prefs, limit=args.limit)
+        # Checkpoint as it goes. A backfill against a rate-limited free tier
+        # runs for hours, and one transaction around all of it means an
+        # interruption throws away every posting already read -- along with
+        # the provider quota that paid for them.
+        report = enrich_jobs(session, prefs, limit=args.limit, commit_every=5)
 
         for line in report.errors[:5]:
             print(f"  ! {line}")
@@ -279,6 +283,8 @@ def _cmd_enrich(args: argparse.Namespace) -> int:
         print(f"  {report.summary()}")
         if report.failed:
             print(f"  {report.failed} did not return usable JSON")
+        if report.quota_exhausted:
+            print("  ! the provider's quota ran out; re-run to continue where this left off")
 
         if args.rescore and report.enriched:
             for user in all_active_users(session):

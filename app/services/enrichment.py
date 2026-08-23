@@ -55,6 +55,8 @@ MIN_ROLE_AFFINITY = 0.35
 class EnrichmentReport:
     considered: int = 0
     eligible: int = 0
+    #: The provider refused further work for reasons waiting cannot fix.
+    quota_exhausted: bool = False
     attempted: int = 0
     enriched: int = 0
     failed: int = 0
@@ -164,10 +166,21 @@ def enrich_jobs(
     limit: int = 200,
     client: LlmClient | None = None,
     now: datetime | None = None,
+    commit_every: int = 0,
 ) -> EnrichmentReport:
     """Read up to ``limit`` postings and store the facts.
 
-    Commits nothing; the caller owns the transaction.
+    Commits nothing by default; the caller owns the transaction. That is right
+    inside a search run, where enrichment is one step of a larger unit of work
+    that should land or not land as a whole.
+
+    It is wrong for a standalone backfill. Hundreds of postings against a
+    rate-limited free tier take hours, and holding all of it in one transaction
+    means an interruption -- a timeout, a closed laptop, Ctrl-C -- discards
+    every posting already read and the quota already spent on them. Set
+    ``commit_every`` to checkpoint instead, which is what this module's promise
+    that a mid-batch failure "leaves the jobs it already read enriched" has
+    always claimed to do.
     """
     report = EnrichmentReport()
     owned = client is None
@@ -191,7 +204,7 @@ def enrich_jobs(
         report.eligible = len(targets)
 
         for job in targets:
-            if client.budget_left <= 0:
+            if client.budget_left <= 0 or client.exhausted:
                 break
             report.attempted += 1
             try:
@@ -204,6 +217,16 @@ def enrich_jobs(
                 continue
             report.skills_added += apply_facts(job, facts, model=client.model, now=now)
             report.enriched += 1
+
+            if commit_every and report.enriched % commit_every == 0:
+                session.commit()
+
+        if client.exhausted:
+            report.errors.append(
+                "The provider's quota ran out before the batch finished. "
+                "Everything read so far is saved; re-run to continue."
+            )
+            report.quota_exhausted = True
 
         session.flush()
         log.info(

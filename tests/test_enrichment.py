@@ -407,3 +407,155 @@ class TestSurvivingTheFreeTier:
         # Both spellings travel together, so a gateway honouring either one
         # applies the same ceiling.
         assert seen["max_tokens"] == seen["max_completion_tokens"]
+
+    def test_a_daily_quota_stops_the_run_instead_of_being_slept_through(self, monkeypatch):
+        """A per-minute limit refills; a per-day one does not. Waiting out the
+        second burns an hour to achieve nothing."""
+        slept: list[float] = []
+        monkeypatch.setattr("app.pipeline.llm.time.sleep", slept.append)
+
+        def handler(request):
+            return httpx.Response(
+                429,
+                headers={"retry-after": "60"},
+                json={"error": {"message": "Rate limit reached ... on tokens per day (TPD): Limit 200000"}},
+            )
+
+        client = stub_client(handler)
+        assert client.extract_facts(normalized_from_job_row(make_job())) is None
+        assert client.exhausted is True
+        assert slept == [], "a daily cap should not be waited on at all"
+
+    def test_once_exhausted_no_further_calls_are_made(self, monkeypatch):
+        monkeypatch.setattr("app.pipeline.llm.time.sleep", lambda _: None)
+        calls = {"n": 0}
+
+        def handler(request):
+            calls["n"] += 1
+            return httpx.Response(429, json={"error": {"message": "tokens per day (TPD) exceeded"}})
+
+        client = stub_client(handler, max_calls=10)
+        for _ in range(4):
+            client.extract_facts(normalized_from_job_row(make_job()))
+        assert calls["n"] == 1
+
+    #: Verbatim from Groq. Note the upgrade URL: every rate-limit message ends
+    #: with one, so a fatal-quota check that matches on "billing" calls this
+    #: recoverable limit fatal and abandons a healthy backfill.
+    TPM_BODY = {
+        "error": {
+            "message": (
+                "Rate limit reached for model `openai/gpt-oss-20b` in organization "
+                "`org_01m0` service tier `on_demand` on tokens per minute (TPM): "
+                "Limit 8000, Used 4839, Requested 6372. Please try again in 24.08s. "
+                "Need more tokens? Upgrade to Dev Tier today at "
+                "https://console.groq.com/settings/billing"
+            ),
+            "type": "tokens",
+            "code": "rate_limit_exceeded",
+        }
+    }
+    TPD_BODY = {
+        "error": {
+            "message": (
+                "Rate limit reached for model `openai/gpt-oss-120b` in organization "
+                "`org_01m0` service tier `on_demand` on tokens per day (TPD): "
+                "Limit 200000, Used 199047, Requested 2000. Please try again in 12m. "
+                "Need more tokens? Upgrade to Dev Tier today at "
+                "https://console.groq.com/settings/billing"
+            ),
+            "type": "tokens",
+            "code": "rate_limit_exceeded",
+        }
+    }
+
+    def test_the_real_per_minute_message_is_not_mistaken_for_a_daily_one(self, monkeypatch):
+        """Both messages end with the same upgrade link. Only the period differs."""
+        monkeypatch.setattr("app.pipeline.llm.time.sleep", lambda _: None)
+        attempts = {"n": 0}
+
+        def handler(request):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                return httpx.Response(429, json=self.TPM_BODY)
+            return completion(json.dumps(GOOD_FACTS))
+
+        client = stub_client(handler)
+        assert client.extract_facts(normalized_from_job_row(make_job())) is not None
+        assert client.exhausted is False
+
+    def test_the_real_daily_message_stops_the_run(self, monkeypatch):
+        monkeypatch.setattr("app.pipeline.llm.time.sleep", lambda _: None)
+        client = stub_client(lambda r: httpx.Response(429, json=self.TPD_BODY))
+        assert client.extract_facts(normalized_from_job_row(make_job())) is None
+        assert client.exhausted is True
+
+    def test_a_per_minute_limit_is_still_waited_out(self, monkeypatch):
+        """The daily check must not swallow the ordinary case."""
+        monkeypatch.setattr("app.pipeline.llm.time.sleep", lambda _: None)
+        attempts = {"n": 0}
+
+        def handler(request):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                return httpx.Response(
+                    429, json={"error": {"message": "Rate limit reached on tokens per minute (TPM)"}}
+                )
+            return completion(json.dumps(GOOD_FACTS))
+
+        client = stub_client(handler)
+        assert client.extract_facts(normalized_from_job_row(make_job())) is not None
+        assert client.exhausted is False
+
+
+class TestABackfillKeepsWhatItAlreadyRead:
+    """Hundreds of postings against a rate-limited free tier take hours. One
+    transaction around all of it means an interruption discards every posting
+    already read, and the provider quota that paid for them."""
+
+    def test_checkpointing_persists_work_before_the_batch_ends(self, session, prefs):
+        jobs = [
+            make_job(id=i, canonical_job_id=f"j{i}", fingerprint=f"f{i}", content_hash=f"h{i}")
+            for i in range(1, 7)
+        ]
+        for job in jobs:
+            session.add(job)
+        session.flush()
+
+        seen = {"n": 0}
+
+        def handler(request):
+            seen["n"] += 1
+            if seen["n"] > 4:
+                raise httpx.ReadTimeout("died mid-batch", request=request)
+            return completion(json.dumps(GOOD_FACTS))
+
+        client = stub_client(handler, max_calls=50)
+        enrich_jobs(session, prefs, limit=50, client=client, commit_every=2)
+
+        # Whatever was read before the model died is on disk, not in a
+        # transaction that a kill would have discarded.
+        session.expire_all()
+        from sqlalchemy import func, select
+
+        from app.models import Job
+
+        persisted = session.scalar(
+            select(func.count(Job.id)).where(Job.enriched_at.is_not(None))
+        )
+        assert persisted >= 4
+
+    def test_without_checkpointing_the_caller_still_owns_the_transaction(self, session, prefs):
+        """The search run enriches inside a larger unit of work that has to
+        land or not land as a whole, so the default must not commit."""
+        job = make_job()
+        session.add(job)
+        session.flush()
+
+        committed = {"n": 0}
+        original = session.commit
+        session.commit = lambda: (committed.__setitem__("n", committed["n"] + 1), original())[1]
+
+        client = stub_client(lambda r: completion(json.dumps(GOOD_FACTS)), max_calls=5)
+        enrich_jobs(session, prefs, limit=5, client=client)
+        assert committed["n"] == 0

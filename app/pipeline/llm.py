@@ -81,6 +81,33 @@ RATE_LIMIT_BACKOFF = 8.0
 RATE_LIMIT_MAX_WAIT = 65.0
 
 
+#: Substrings that mark a quota no amount of waiting inside this run will
+#: refill. Kept narrow and literal: these have to name the *period*, not merely
+#: sound expensive.
+DAILY_LIMIT_MARKERS: tuple[str, ...] = (
+    "per day",
+    "(tpd)",
+    "per_day",
+    "insufficient_quota",
+    "quota_exceeded",
+)
+
+#: Phrases that prove a limit *is* recoverable, checked first and allowed to
+#: win. Groq ends every rate-limit message -- including the ordinary
+#: per-minute one -- with an invitation to upgrade at a /settings/billing URL,
+#: so anything matching on "billing" or a bare "quota" calls a limit fatal that
+#: refills in seconds, and abandons a backfill that had nothing wrong with it.
+RECOVERABLE_LIMIT_MARKERS: tuple[str, ...] = ("per minute", "(tpm)", "(rpm)", "per_minute")
+
+
+def _is_exhausted(response: httpx.Response) -> bool:
+    """Whether this 429 means "come back tomorrow" rather than "slow down"."""
+    body = (response.text or "").lower()[:600]
+    if any(marker in body for marker in RECOVERABLE_LIMIT_MARKERS):
+        return False
+    return any(marker in body for marker in DAILY_LIMIT_MARKERS)
+
+
 def _retry_after_seconds(response: httpx.Response) -> float | None:
     """How long the provider asked us to wait, if it said."""
     for header in ("retry-after", "x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
@@ -120,6 +147,10 @@ class LlmClient:
         self.max_calls = max_calls if max_calls is not None else settings.llm_max_calls_per_run
         self.timeout = timeout if timeout is not None else settings.llm_timeout_seconds
         self.calls = 0
+        #: Set when the provider reports a quota that will not refill during
+        #: this run. Every later call short-circuits, because sleeping out a
+        #: daily cap one minute at a time burns an hour to achieve nothing.
+        self.exhausted = False
         self._key = settings.llm_key
         self._client: httpx.Client | None = None
 
@@ -149,7 +180,7 @@ class LlmClient:
         self.close()
 
     def _complete(self, system: str, prompt: str, *, max_tokens: int = 400) -> dict | None:
-        if not self.enabled or self.budget_left <= 0:
+        if not self.enabled or self.budget_left <= 0 or self.exhausted:
             return None
         self.calls += 1
         # Callers ask for the room their *answer* needs. A reasoning model
@@ -215,6 +246,13 @@ class LlmClient:
         for attempt in range(RATE_LIMIT_RETRIES + 1):
             response = client.post("/chat/completions", json=body)
             if response.status_code != 429:
+                return response
+            if _is_exhausted(response):
+                # A daily allowance does not come back within this run, and the
+                # backfill that just spent it should stop rather than sleep
+                # through the rest of its postings one minute at a time.
+                self.exhausted = True
+                log.warning("llm.quota_exhausted", model=self.model, body=response.text[:200])
                 return response
             if attempt == RATE_LIMIT_RETRIES:
                 log.warning("llm.rate_limited_out", model=self.model, waited=attempt)
