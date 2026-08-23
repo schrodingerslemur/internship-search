@@ -92,13 +92,34 @@ verbatim in the posting. It is the configured default.
 **Then re-read the distribution.** The thresholds are set on a corpus that is
 45% enriched.
 
-## 2. Enrichment still only runs locally
+## 2. The deployed corpus has never been enriched
 
-The GitHub Actions workflow configures no LLM, so the deployed instance enriches
-nothing. Its *results* reach production through the shared database, so the
-local backfill is worth continuing either way. Running it server-side means
-adding `LLM_BASE_URL`, `LLM_API_KEY` and `LLM_ENABLED` as repository secrets —
-a decision about where the key lives, not a code change.
+**Correction to the previous entry, which was wrong.** It claimed the local
+backfill's results "reach production through the shared database". There is no
+shared database. Local is sqlite (`data/internship.db`, 5,276 active jobs);
+deployed is Neon Postgres (3,420). They are crawled separately and share
+nothing. Every posting enriched locally benefits the local copy only, and the
+deployed corpus — the one actually read on a phone — has had **zero** postings
+read by a model.
+
+The workflow now passes `LLM_*` through, so the only thing missing is the
+secret:
+
+```
+gh secret set LLM_API_KEY        # the Groq key
+```
+
+Safe by construction until then: a remote endpoint with no key reports itself
+unavailable, so the run behaves exactly as it does today. Once set, each run
+reads up to 40 postings — `LLM_MAX_CALLS_PER_RUN`, deliberately small, because
+Groq's free tier would otherwise leave the job asleep waiting out rate limits.
+Eight runs a day gets through the backlog in about a week without any local
+involvement.
+
+Worth deciding at the same time: whether the local sqlite copy is still worth
+keeping. Two corpora that are scored, enriched and tuned independently is twice
+the work and half the confidence, and every measurement in this document
+describes the one you do not read.
 
 ## 3. Google is reached but barely
 
@@ -124,9 +145,15 @@ permanently.
 ## Open questions
 
 - **The credentialed aggregators are all unconfigured** — Adzuna, JSearch,
-  USAJOBS, Jooble, SerpApi. Adzuna's free tier in particular would cover Google
-  and Microsoft far better than a bespoke adapter can, and the code is already
-  written. This is now the cheapest remaining coverage win.
+  USAJOBS, Jooble, SerpApi. This is now the cheapest remaining coverage win by
+  a wide margin, and the bespoke-adapter route has visibly run out of road:
+  Broadcom, Qualcomm, Texas Instruments, Synopsys, Infineon, STMicro, Lattice,
+  Seagate, Waymo and IBM between them contribute **five** jobs, none is on
+  Phenom or Eightfold, and only Intel of that group answers a guessable Workday
+  tenant. Ten more adapters, one per employer, against one set of free
+  credentials. The Adzuna client is already written and its fields already map
+  correctly; it needs an app id and key from developer.adzuna.com and nothing
+  else.
 - **`EVIDENCE_DISCOUNT = 0.93` is a judgement, not a measurement.** It was
   chosen so a verified match outranks an unverified one with the same title,
   and checked against the corpus. If enrichment closes the description gap, it

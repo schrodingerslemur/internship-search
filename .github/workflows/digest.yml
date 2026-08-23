@@ -12,6 +12,12 @@
 # Optional:
 #   PUBLIC_BASE_URL  https://<your-app>.onrender.com -- makes the digest's
 #                    dashboard link point somewhere real
+#   LLM_API_KEY      enables enrichment against the deployed database. Without
+#                    it the deployed corpus is never enriched at all, because
+#                    the local backfill writes to a different database and its
+#                    results do not travel. See the LLM_* block below.
+#   ADZUNA_APP_ID    free at developer.adzuna.com. One aggregator reaches the
+#   ADZUNA_APP_KEY   large employers that would each need a bespoke adapter
 
 name: Internship digest
 
@@ -59,6 +65,28 @@ jobs:
       SCHEDULER_ENABLED: "false"
       LOG_FORMAT: json
       TIMEZONE: America/New_York
+      # Reading postings the hand-written vocabulary cannot. Enrichment is
+      # additive and entirely optional: with no key these stay empty, the
+      # client reports itself unavailable, and the run behaves exactly as it
+      # did before.
+      #
+      # With a key it is the *only* thing that enriches the deployed corpus.
+      # The local backfill writes to a different database -- sqlite here,
+      # Postgres there -- so its results never travel, and the deployed
+      # corpus has never had a single posting read.
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_BASE_URL: https://api.groq.com/openai/v1
+      # Cheapest of the three usable Groq models and, on this corpus, also the
+      # most accurate: about 500 tokens a posting against 2,000 for the 120b.
+      LLM_MODEL: openai/gpt-oss-20b
+      LLM_ENABLED: "true"
+      # Groq's free tier allows 8k tokens a minute and 200k a day, so a run
+      # asked to read hundreds of postings would spend most of its time
+      # asleep waiting out rate limits. Each run takes a bite; the next one
+      # continues where it stopped.
+      LLM_MAX_CALLS_PER_RUN: "40"
+      LLM_TIMEOUT_SECONDS: "45"
+
       # Optional extras -- absent secrets leave these empty and the matching
       # source simply reports itself unconfigured.
       ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
