@@ -22,12 +22,11 @@
 name: Internship digest
 
 on:
-  # Every three hours. A run costs about six minutes and only emails you when
-  # it finds something new, so searching often is how postings reach you while
-  # they are still fresh -- without the fixed-time schedule this used to need,
-  # and without the daylight-saving gymnastics that came with it.
+  # Twice a day. Every three hours used up the free database's monthly
+  # transfer allowance in two weeks. Cron runs in UTC, so these land at
+  # 8am and 5pm Eastern in summer and an hour earlier in winter.
   schedule:
-    - cron: "0 */3 * * *"
+    - cron: "0 12,21 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
