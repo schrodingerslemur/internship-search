@@ -10,9 +10,9 @@ table stays proportional to decisions made rather than to jobs crawled.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.logging_setup import get_logger
@@ -361,6 +361,46 @@ def rescore_all_for_user(
         profile if profile is not None else load_profile(session, user=user),
         now=now,
     )
+
+
+#: How stale the oldest stored score may get before a run re-scores the whole
+#: corpus. Freshness decays by the day, so a daily pass keeps it honest;
+#: doing it every run pulled every active posting's full text out of the
+#: database eight times a day, which is what exhausted the hosted database's
+#: monthly transfer allowance.
+FULL_RESCORE_INTERVAL = timedelta(hours=20)
+
+
+def rescore_for_run(
+    session: Session,
+    user: User,
+    prefs,
+    profile,
+    job_ids: list[int],
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Score what a search run touched, and the whole corpus once a day.
+
+    ``job_ids`` are the jobs this run created, changed or enriched; anything
+    else only needs re-scoring for freshness decay, which moves slowly.
+    """
+    now = now or utcnow()
+    oldest = session.scalar(
+        select(func.min(UserJobState.scored_at))
+        .join(Job, Job.id == UserJobState.job_id)
+        .where(UserJobState.user_id == user.id, Job.is_active.is_(True))
+    )
+    if oldest is None or now - oldest >= FULL_RESCORE_INTERVAL:
+        return rescore_all_for_user(session, user, prefs, profile, now=now)
+    if not job_ids:
+        return 0
+    jobs = list(
+        session.scalars(
+            select(Job).where(Job.id.in_(sorted(set(job_ids))), Job.is_active.is_(True))
+        ).all()
+    )
+    return score_jobs_for_user(session, user, jobs, prefs, profile, now=now)
 
 
 def score_of(state: UserJobState | None, job: Job) -> float:

@@ -55,6 +55,7 @@ class PersistOutcome:
     stored_jobs: list[Job] = field(default_factory=list)
     new_job_ids: list[int] = field(default_factory=list)
     updated_job_ids: list[int] = field(default_factory=list)
+    reposted_job_ids: list[int] = field(default_factory=list)
 
 
 def _set_if_present(job: Job, field: str, value: object) -> None:
@@ -394,6 +395,7 @@ def persist_clusters(
                 if job.status == JobStatus.EXPIRED.value:
                     job.status = JobStatus.NEW.value
                 outcome.reposted_jobs += 1
+                outcome.reposted_job_ids.append(job.id)
                 _add_event(job, "reposted", "Job reappeared in search results", run_id, now)
             elif changes:
                 job.freshness = Freshness.UPDATED.value

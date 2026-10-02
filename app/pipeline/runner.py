@@ -77,6 +77,7 @@ class RunReport:
     outcomes: list[SourceOutcome] = field(default_factory=list)
     new_job_ids: list[int] = field(default_factory=list)
     updated_job_ids: list[int] = field(default_factory=list)
+    reposted_job_ids: list[int] = field(default_factory=list)
 
     def summary(self) -> str:
         return (
@@ -297,17 +298,20 @@ async def run_search(
         report.reposted_jobs = persisted.reposted_jobs
         report.new_job_ids = persisted.new_job_ids
         report.updated_job_ids = persisted.updated_job_ids
+        report.reposted_job_ids = persisted.reposted_job_ids
         report.expired_jobs = expire_stale_jobs(session, run_id=report.run_id)
 
         # Read the postings the vocabulary could not, before anybody is scored
         # against them. Bounded by the same call budget as every other model
         # stage, selected by role affinity, and entirely optional -- with no
         # model configured this returns an empty report and changes nothing.
+        enriched_ids: list[int] = []
         try:
             from app.services.enrichment import enrich_jobs
 
             enrichment = enrich_jobs(session, prefs, limit=llm.budget_left or 0)
             report.jobs_enriched = enrichment.enriched
+            enriched_ids = enrichment.job_ids
             report.llm_calls += enrichment.attempted
         except Exception:
             log.exception("run.enrichment_failed")
@@ -347,18 +351,22 @@ async def run_search(
                 # the same posting is a different prospect for two people with
                 # different profiles.
                 #
-                # The whole active corpus, not just this run's jobs. Freshness
-                # decays with the calendar while a stored score does not, so
-                # scoring only what the crawl touched left everything else
-                # carrying the staleness penalty it had when it was found --
-                # across the corpus that component's median had decayed to
-                # zero. Re-scoring is pure CPU over rows already in memory.
+                # What this run touched, plus the whole active corpus once a
+                # day. Freshness decays with the calendar while a stored score
+                # does not, so never re-scoring the rest left everything
+                # carrying the staleness penalty it had when it was found. But
+                # doing it every run meant reading every posting's full text
+                # from the database eight times a day, which is metered.
                 try:
-                    user_jobs.rescore_all_for_user(
+                    user_jobs.rescore_for_run(
                         session,
                         user,
                         prefs_now,
                         load_profile(session, user=user),
+                        report.new_job_ids
+                        + report.updated_job_ids
+                        + report.reposted_job_ids
+                        + enriched_ids,
                         now=utcnow(),
                     )
                 except Exception:

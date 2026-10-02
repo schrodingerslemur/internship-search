@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.logging_setup import get_logger
@@ -63,6 +63,8 @@ class EnrichmentReport:
     skills_added: int = 0
     model: str = ""
     errors: list[str] = field(default_factory=list)
+    #: Jobs whose stored facts changed, so their scores are now stale.
+    job_ids: list[int] = field(default_factory=list)
 
     def summary(self) -> str:
         return (
@@ -99,11 +101,19 @@ def candidates(
     most.
     """
     roles = [r.name for r in prefs.enabled_roles()]
-    if not roles:
+    if not roles or limit <= 0:
         return []
 
-    rows = session.scalars(
-        select(Job)
+    # Rank on titles alone, then load whole rows only for the handful that
+    # will actually be read. Selecting full rows here pulled every unread
+    # posting's description out of the database on every run -- tens of
+    # megabytes, to choose forty -- and that transfer is metered.
+    body_chars = (
+        func.length(func.coalesce(Job.description, ""))
+        + func.length(func.coalesce(Job.requirements, ""))
+    )
+    rows = session.execute(
+        select(Job.id, Job.title)
         .where(
             Job.is_active.is_(True),
             or_(
@@ -111,21 +121,28 @@ def candidates(
                 Job.enrichment_hash.is_(None),
                 Job.enrichment_hash != Job.content_hash,
             ),
+            body_chars >= MIN_BODY_CHARS,
         )
         .limit(5000)
     ).all()
 
-    scored: list[tuple[float, Job]] = []
-    for job in rows:
-        if not needs_enrichment(job):
-            continue
-        affinity = max((role_affinity(job.title, role) for role in roles), default=0.0)
+    scored: list[tuple[float, int]] = []
+    for job_id, title in rows:
+        affinity = max((role_affinity(title, role) for role in roles), default=0.0)
         if affinity < MIN_ROLE_AFFINITY:
             continue
-        scored.append((affinity, job))
-
+        scored.append((affinity, job_id))
     scored.sort(key=lambda pair: -pair[0])
-    return [job for _, job in scored[:limit]]
+
+    # Over-fetch slightly: the length test above cannot strip whitespace, so
+    # needs_enrichment() still has the final say on each loaded row.
+    wanted = [job_id for _, job_id in scored[: limit * 2]]
+    by_id = {
+        job.id: job
+        for job in session.scalars(select(Job).where(Job.id.in_(wanted))).all()
+    } if wanted else {}
+    picked = [by_id[i] for i in wanted if i in by_id and needs_enrichment(by_id[i])]
+    return picked[:limit]
 
 
 def apply_facts(job: Job, facts: dict, *, model: str, now: datetime | None = None) -> int:
@@ -195,8 +212,6 @@ def enrich_jobs(
             )
             return report
 
-        from sqlalchemy import func
-
         targets = candidates(session, prefs, limit=limit)
         report.considered = (
             session.scalar(select(func.count(Job.id)).where(Job.is_active.is_(True))) or 0
@@ -217,6 +232,7 @@ def enrich_jobs(
                 continue
             report.skills_added += apply_facts(job, facts, model=client.model, now=now)
             report.enriched += 1
+            report.job_ids.append(job.id)
 
             if commit_every and report.enriched % commit_every == 0:
                 session.commit()
