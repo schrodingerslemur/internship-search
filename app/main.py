@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
     # port binds immediately and the platform health check passes.
     from app.services.bootstrap import schedule_seed
 
-    if schedule_seed() is not None:
+    if settings.bootstrap_seed_enabled and schedule_seed() is not None:
         log.info("bootstrap.seed_scheduled")
 
     app.state.signing_key = _load_signing_key()

@@ -85,6 +85,7 @@ class Settings(BaseSettings):
 
     # ---- Scheduler ----
     scheduler_enabled: bool = True
+    bootstrap_seed_enabled: bool = True
     morning_digest_enabled: bool = True
     morning_digest_time: str = "08:00"
     afternoon_digest_enabled: bool = True

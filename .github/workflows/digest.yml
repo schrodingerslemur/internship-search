@@ -22,11 +22,10 @@
 name: Internship digest
 
 on:
-  # Twice a day. Every three hours used up the free database's monthly
-  # transfer allowance in two weeks. Cron runs in UTC, so these land at
-  # 8am and 5pm Eastern in summer and an hour earlier in winter.
+  # One pull per day to limit database compute and transfer. Cron is UTC:
+  # 8:17am Eastern in summer, 7:17am in winter. Avoid the busy hour boundary.
   schedule:
-    - cron: "0 12,21 * * *"
+    - cron: "17 12 * * *"
   workflow_dispatch:
     inputs:
       dry_run:

@@ -1,6 +1,6 @@
 # Render blueprint for the dashboard, on the free plan.
 #
-# This hosts the *dashboard only*. The twice-daily digests are sent by the
+# This hosts the *dashboard only*. The daily digests are sent by the
 # GitHub Actions workflow, and the database lives in Neon, so this service
 # holds no state of its own: it can sleep, restart or be rebuilt without
 # losing anything or missing a digest.
@@ -29,6 +29,10 @@ services:
       # The GitHub Actions workflow owns the schedule. A second scheduler here
       # would send every digest twice.
       - key: SCHEDULER_ENABLED
+        value: "false"
+      # Actions discovers boards during the daily pull. Avoid seed checks and
+      # background crawling whenever this ephemeral dashboard starts.
+      - key: BOOTSTRAP_SEED_ENABLED
         value: "false"
       - key: TIMEZONE
         value: America/New_York

@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.logging_setup import get_logger
 from app.models import Company, Job, JobEvent, JobListing
@@ -138,7 +138,7 @@ class LookupIndex:
         # Python: one indexed IN beats a large OR of composite equalities.
         for batch in _chunked(sorted(source_ids)):
             for row in self.session.scalars(
-                select(JobListing).where(JobListing.source_job_id.in_(batch))
+                select(JobListing).options(defer(JobListing.raw_payload)).where(JobListing.source_job_id.in_(batch))
             ).all():
                 self.listings_by_source_key[(row.source, row.source_job_id)] = row
 
@@ -148,13 +148,13 @@ class LookupIndex:
             ).all():
                 self.jobs_by_ats_identity.setdefault(job.ats_identity, job)
             for row in self.session.scalars(
-                select(JobListing).where(JobListing.ats_identity.in_(batch))
+                select(JobListing).options(defer(JobListing.raw_payload)).where(JobListing.ats_identity.in_(batch))
             ).all():
                 self.listings_by_ats_identity.setdefault(row.ats_identity, row)
 
         for batch in _chunked(sorted(hashes)):
             for row in self.session.scalars(
-                select(JobListing).where(JobListing.canonical_url_hash.in_(batch))
+                select(JobListing).options(defer(JobListing.raw_payload)).where(JobListing.canonical_url_hash.in_(batch))
             ).all():
                 self.listings_by_url_hash.setdefault(row.canonical_url_hash, row)
 
@@ -173,7 +173,7 @@ class LookupIndex:
         job_ids = {job.id for job in self._candidate_jobs() if job.id is not None}
         for batch in _chunked(sorted(job_ids)):
             for row in self.session.scalars(
-                select(JobListing).where(JobListing.job_id.in_(batch))
+                select(JobListing).options(defer(JobListing.raw_payload)).where(JobListing.job_id.in_(batch))
             ).all():
                 self.listings_by_job_id.setdefault(row.job_id, {})[
                     (row.source, row.source_job_id)

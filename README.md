@@ -280,11 +280,11 @@ TOP MATCHES
 📍 Santa Clara, CA · 4 sources
 ```
 
-Digests run on whatever cadence the scheduler is set to — every three hours in
-the shipped GitHub Actions workflow — but a *search* running is not the same as
-an *email* arriving. Mail is sent only when a job clears your threshold and has
-not been sent before, so a frequent schedule buys freshness rather than volume.
-Schedule changes apply immediately — no restart.
+The shipped GitHub Actions workflow pulls once daily at 12:17 UTC (8:17am
+Eastern in summer, 7:17am in winter). Mail is sent only when a job clears your
+threshold and has not been sent before. Change the cron in
+`.github/workflows/digest.yml` to adjust the hosted schedule; dashboard schedule
+settings apply only when the app's own scheduler is enabled.
 
 ---
 
@@ -405,7 +405,7 @@ python -m alembic upgrade head
 ## Deployment
 
 The digest has to arrive whether or not any machine of yours is switched on, so
-something has to run twice a day and remember what it already sent you. There
+something has to run daily and remember what it already sent you. There
 are two shapes of that, and the difference is only *where the clock lives*.
 
 | | Free option | Always-on option |
@@ -486,12 +486,15 @@ it seeds the registry from the curated lists.
 
 That is the whole setup. `.github/workflows/digest.yml` then fires on its own.
 
-**The schedule is every three hours, not twice a day.** A run costs about six
-minutes and only sends mail when it finds something that clears your score
-threshold and has not been sent before, so running often is what gets a posting
-to you while it is still fresh -- it does not multiply the email you receive.
-That property comes from the notification rules, not the schedule: see
-[Notifications](#notifications).
+**The schedule is once a day**, at 12:17 UTC. This halves scheduled pulls
+compared with twice daily, reducing database compute and transfer. New postings
+can take up to a day to appear. Use Actions ? Run workflow for an extra manual
+pull when needed. The dashboard reads the saved results on demand; it does not
+need to stay awake for the daily pull. Listing identity lookups omit unused raw
+payloads to reduce repeated database downloads.
+
+Render also sets `BOOTSTRAP_SEED_ENABLED=false`, so waking the dashboard does
+not start registry seeding. Daily searches populate the registry.
 
 **The dashboard.** Two ways, and they can coexist:
 
