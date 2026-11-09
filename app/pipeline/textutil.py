@@ -6,7 +6,7 @@ import hashlib
 import re
 import unicodedata
 
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser
 
 _WS = re.compile(r"\s+")
 _NON_ALNUM = re.compile(r"[^a-z0-9+#. ]+")
@@ -101,7 +101,7 @@ def strip_html(text: str | None) -> str:
         out = re.sub(r"[ \t]+", " ", text)
         return re.sub(r"\n\s*\n+", "\n\n", out).strip()
     try:
-        tree = HTMLParser(text)
+        tree = LexborHTMLParser(text)
         for tag in tree.css("script, style"):
             tag.decompose()
         # Preserve list/paragraph breaks so requirement bullets stay separable.
