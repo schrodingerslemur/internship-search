@@ -329,6 +329,51 @@ Filtering by source still returns **canonical jobs**, never one row per listing.
 
 ---
 
+## Application assistant
+
+`python -m app.cli apply` runs on your own machine and does everything up to
+the Submit button:
+
+1. Picks up to `daily_cap` (default 5) of the day's best open matches --
+   `apply_now` or `strong_match`, not applied to or dismissed -- that have a
+   Greenhouse form.
+2. Reads each form's questions from Greenhouse's public board API, with the
+   exact dropdown options.
+3. Answers them: contact details and resume from your profile, your standing
+   answers, rules for the questions every form asks (sponsorship, work
+   authorization, school, degree, graduation, demographics declined), then the
+   configured model for what is left -- told to use only your profile and
+   resume, and to leave a question blank rather than guess.
+4. Opens each form in Chrome, filled in with the resume attached, and lists
+   anything the AI wrote and anything left for you. You review it and click
+   Submit; on the confirmation page the job is marked applied in the tracker.
+   Close the tab to skip a job.
+
+Lever, Ashby and Workday forms are not filled; those jobs stay in the digest.
+
+Setup, once:
+
+```bash
+pip install -e ".[apply]"
+playwright install chromium
+cp app/apply/profile.example.json data/apply/profile.json   # then fill it in
+```
+
+Everything personal -- profile, drafts, the browser profile -- lives in
+`data/apply/`, which git ignores. Run it against the same database the digest
+uses (Neon, for the GitHub Actions deployment) so it sees the same jobs and
+the tracker stays in one place: put `DATABASE_URL` in `.env.apply`, also
+ignored, and run `scripts/apply.ps1`, which loads it before calling the CLI.
+
+```bash
+python -m app.cli apply --prepare-only     # draft without opening anything
+python -m app.cli apply --open-only        # open what is already drafted
+python -m app.cli apply --job URL          # one specific Greenhouse link
+python -m app.cli apply --job URL --check  # fill invisibly, screenshot, never submit
+```
+
+---
+
 ## Architecture
 
 ```
@@ -380,6 +425,7 @@ python -m app.cli seed                 # seed companies/boards from curated list
 python -m app.cli notify-test --provider telegram
 python -m app.cli stats                # what is in the database
 python -m app.cli serve --reload
+python -m app.cli apply                # open today's applications filled in; you submit
 ```
 
 ---
@@ -632,6 +678,8 @@ suppression, scheduling and timezones, source adapters against recorded payloads
 
 ## Not implemented (deliberately)
 
-Auto-applying to jobs. The Apply button opens the employer's own page and
-nothing is ever submitted for you. Resume recommendations never rewrite your
+Submitting applications for you. Every Greenhouse, Lever and Ashby form sits
+behind a bot check (Greenhouse loads reCAPTCHA Enterprise on every board), and
+an application goes out under your name. The application assistant below fills
+forms in; you always click Submit. Resume recommendations never rewrite your
 resume or invent experience.

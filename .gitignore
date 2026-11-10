@@ -1,6 +1,7 @@
 # Env / secrets
 .env
 .env.local
+.env.apply
 *.pem
 
 # Python
@@ -25,6 +26,8 @@ data/cache/
 logs/
 *.log
 resumes/
+# Application assistant: profile, drafts, browser profile. Personal data.
+data/apply/
 
 # OS / editor
 .DS_Store

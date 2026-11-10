@@ -6,6 +6,7 @@
     python -m app.cli seed            seed the ATS registry from curated lists
     python -m app.cli notify-test     verify notification delivery
     python -m app.cli stats           print current database stats
+    python -m app.cli apply           prepare today's applications and fill them in
 """
 
 from __future__ import annotations
@@ -359,6 +360,81 @@ def _cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_apply(args: argparse.Namespace) -> int:
+    """Prepare applications and open them filled in; you click Submit.
+
+    Never submits on its own: every supported form sits behind a bot check,
+    and an application goes out under your name. See app/apply/.
+    """
+    from datetime import datetime
+
+    from app.apply import greenhouse, ledger
+    from app.apply.profile import apply_dir, load_profile
+    from app.apply.run import check, draft_for, mark_applied, prepare, resolve_user, submit_session
+    from app.pipeline.llm import LlmClient
+
+    try:
+        profile = load_profile()
+    except FileNotFoundError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    problems = profile.problems()
+    if problems:
+        print("Fix the applicant profile first:", file=sys.stderr)
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        return 1
+
+    def on_submitted(draft) -> bool:
+        return mark_applied(draft, args.email)
+
+    if args.job:
+        form = greenhouse.identify(args.job)
+        if form is None:
+            print("Only Greenhouse application links are supported.", file=sys.stderr)
+            return 1
+        with LlmClient(max_calls=3) as llm:
+            draft = draft_for(form, profile, llm=llm)
+        if args.check:
+            shot = apply_dir() / "screens" / f"{form.token}-{form.job_id}-{datetime.now():%H%M%S}.png"
+            shot.parent.mkdir(parents=True, exist_ok=True)
+            for line in check(draft, profile, shot):
+                print(line)
+            print(f"  screenshot: {shot}")
+            return 0
+        ledger.record_draft(draft)
+        submit_session([draft], profile, on_submitted=on_submitted)
+        return 0
+
+    if not args.open_only:
+        from app.db import session_scope
+
+        print("Preparing today's applications...")
+        with session_scope() as session, LlmClient(max_calls=3 * profile.daily_cap) as llm:
+            try:
+                user = resolve_user(session, args.email)
+            except LookupError as exc:
+                print(exc, file=sys.stderr)
+                return 1
+            prepare(session, user, profile, llm=llm)
+
+    if args.prepare_only:
+        return 0
+    drafts = ledger.waiting()
+    if not drafts:
+        print("Nothing waiting to submit.")
+        return 0
+    print()
+    print(f"Opening {len(drafts)} application(s). Each opens filled in; you submit.")
+    tally = submit_session(drafts, profile, on_submitted=on_submitted)
+    print()
+    print(
+        f"Done: {tally['submitted']} submitted, {tally['skipped']} skipped, "
+        f"{tally['unfinished']} left for next time."
+    )
+    return 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -414,6 +490,18 @@ def main(argv: list[str] | None = None) -> int:
     p_pw.add_argument("--email", required=True)
     p_pw.add_argument("--password", default=None, help="omit to generate a strong one")
 
+    p_apply = sub.add_parser(
+        "apply", help="prepare today's applications and open them filled in (you submit)"
+    )
+    p_apply.add_argument("--prepare-only", action="store_true", help="draft, do not open")
+    p_apply.add_argument("--open-only", action="store_true", help="open drafts already prepared")
+    p_apply.add_argument("--job", help="prepare one specific Greenhouse application link")
+    p_apply.add_argument(
+        "--check", action="store_true",
+        help="with --job: fill it invisibly and save a screenshot, never submit",
+    )
+    p_apply.add_argument("--email", help="which account to record applications against")
+
     p_serve = sub.add_parser("serve", help="run the web dashboard")
     p_serve.add_argument("--host", default=None)
     p_serve.add_argument("--port", type=int, default=None)
@@ -438,6 +526,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_enrich(args)
     if args.command == "stats":
         return _cmd_stats(args)
+    if args.command == "apply":
+        return _cmd_apply(args)
     if args.command == "serve":
         return _cmd_serve(args)
     parser.print_help()

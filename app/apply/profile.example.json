@@ -1,0 +1,31 @@
+{
+  "_comment": "Copy to data/apply/profile.json (git-ignored) and fill in. Standing answers: 'match' is a case-insensitive regex tested against a question's label; 'answer' is the text to enter or the dropdown option to pick.",
+  "first_name": "",
+  "last_name": "",
+  "email": "",
+  "phone": "",
+  "country": "United States",
+  "location": "Pittsburgh, PA",
+  "linkedin": "",
+  "github": "",
+  "website": "",
+  "school": "",
+  "degree": "Bachelor's",
+  "discipline": "",
+  "graduation": "May 2027",
+  "graduation_month": 5,
+  "graduation_year": 2027,
+  "us_citizen": null,
+  "work_authorized_us": null,
+  "requires_sponsorship": null,
+  "willing_to_relocate": true,
+  "terms": ["Summer 2027"],
+  "earliest_start": "",
+  "demographics": "decline",
+  "resume_path": "data/resumes/resume.pdf",
+  "daily_cap": 5,
+  "never_apply_to": [],
+  "standing_answers": [
+    {"match": "offers? from other|competing offer|other offers|deadlines? we should", "answer": "No"}
+  ]
+}

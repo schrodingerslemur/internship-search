@@ -72,6 +72,22 @@ EXTRACT_SYSTEM = (
 )
 
 
+APPLY_SYSTEM = (
+    "You fill in a job application for a candidate, using ONLY the candidate "
+    "facts and resume provided. Never invent experience, numbers, dates, "
+    "grades, offers, referrals or personal circumstances. If the facts and "
+    "resume do not settle a question, set confident to false and answer to "
+    "null -- a blank the candidate fills in is far better than a wrong answer "
+    "sent under their name. For a question with options, the answer must be "
+    "copied exactly from the options (a list of them for multiselect). For a "
+    "free-text 'why this company/role' question, write 2-4 plain first-person "
+    "sentences tying specific resume items to the posting; no cliches, no "
+    "flattery, nothing the resume does not support. "
+    'Reply with JSON only: {"answers": [{"name": "...", "answer": "..." | '
+    '["..."] | null, "confident": true|false}]}'
+)
+
+
 #: How many times to wait out a 429 before giving up on one posting. The free
 #: tiers refill per minute, so a handful of waits covers an ordinary backfill.
 RATE_LIMIT_RETRIES = 4
@@ -367,6 +383,31 @@ class LlmClient:
             return None
         return _sanitize_assessment(payload)
 
+    # -- application answers --
+
+    def answer_application_questions(
+        self, *, facts: str, resume: str, posting: str, questions: list[dict]
+    ) -> dict[str, dict]:
+        """Answer form questions from the applicant's own facts, or decline.
+
+        Returns ``{field_name: {"answer": ..., "confident": bool}}``. Anything
+        the facts and resume do not settle comes back unconfident, and the
+        caller leaves it for the applicant to fill in by hand.
+        """
+        payload = self._complete(
+            APPLY_SYSTEM,
+            _apply_prompt(facts, resume, posting, questions),
+            max_tokens=300 + 250 * len(questions),
+        )
+        out: dict[str, dict] = {}
+        for item in (payload or {}).get("answers") or []:
+            if isinstance(item, dict) and item.get("name"):
+                out[str(item["name"])] = {
+                    "answer": item.get("answer"),
+                    "confident": item.get("confident") is True,
+                }
+        return out
+
 
 def _parse_json(text: str) -> dict | None:
     if not text:
@@ -546,6 +587,24 @@ def _classify_prompt(job: NormalizedJob, profile_summary: str) -> str:
         f"Description: {truncate(job.description, 2500)}\n"
         f"Requirements: {truncate(job.requirements, 1200)}\n\n"
         "Assess the fit."
+    )
+
+
+def _apply_prompt(facts: str, resume: str, posting: str, questions: list[dict]) -> str:
+    lines = []
+    for q in questions:
+        line = f'- name="{q["name"]}" type={q["type"]} question: {q["label"]}'
+        if q.get("options"):
+            options = q["options"]
+            shown = options[:40]
+            more = f" (+{len(options) - 40} more)" if len(options) > 40 else ""
+            line += f"\n  options: {json.dumps(shown, ensure_ascii=False)}{more}"
+        lines.append(line)
+    return (
+        f"Candidate facts:\n{facts}\n\n"
+        f"Resume:\n{truncate(resume, 5000)}\n\n"
+        f"Job posting:\n{truncate(posting, 2500)}\n\n"
+        "Questions:\n" + "\n".join(lines)
     )
 
 
