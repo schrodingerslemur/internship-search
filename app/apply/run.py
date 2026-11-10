@@ -106,11 +106,12 @@ def describe(draft: Draft, report=None) -> list[str]:
     return lines
 
 
-def resolve_user(session, email: str | None = None):
+def resolve_user(session, email: str | None = None, fallback_email: str | None = None):
     """The account applications are recorded against.
 
     An explicit email wins; a single-account database needs no choice; a
-    shared one falls back to the account the digest is addressed to.
+    shared one falls back to the applicant's own email (``fallback_email``,
+    normally the profile's), then to the account the digest is addressed to.
     """
     from app.config import get_settings
     from app.services.auth import find_by_email
@@ -124,6 +125,10 @@ def resolve_user(session, email: str | None = None):
     users = all_active_users(session)
     if len(users) == 1:
         return users[0]
+    own = (fallback_email or "").lower()
+    for user in users:
+        if own and own in ((user.email or "").lower(), (user.notification_email or "").lower()):
+            return user
     target = (get_settings().email_to or "").lower()
     for user in users:
         if target and (user.notification_email or "").lower() == target:
@@ -132,7 +137,9 @@ def resolve_user(session, email: str | None = None):
     raise LookupError(f"several accounts ({known}); pass --email to pick one")
 
 
-def mark_applied(draft: Draft, email: str | None = None) -> bool:
+def mark_applied(
+    draft: Draft, email: str | None = None, fallback_email: str | None = None
+) -> bool:
     """Record the application in the tracker, if the job is in this database.
 
     Opens its own short session: the browser can sit on one form for half an
@@ -148,7 +155,7 @@ def mark_applied(draft: Draft, email: str | None = None) -> bool:
         job = get_job(session, draft.canonical_job_id)
         if job is None:
             return False
-        user = resolve_user(session, email)
+        user = resolve_user(session, email, fallback_email)
         set_status(session, job, JobStatus.APPLIED, user)
         add_note(session, job, "Submitted with the application assistant.", user)
     return True

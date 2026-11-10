@@ -322,3 +322,73 @@ def test_ledger_round_trip_and_daily_cap(applicant):
     ledger.set_status(draft.key, ledger.SUBMITTED)
     assert ledger.waiting() == []
     assert "greenhouse:acme:1" in ledger.known_keys()
+
+
+class TestResolveUser:
+    def _two_accounts(self, session):
+        from app.models.user import User
+
+        first = User(email="first@example.com", is_active=True)
+        second = User(email="me@example.com", is_active=True)
+        session.add_all([first, second])
+        session.flush()
+        return first, second
+
+    def test_shared_database_falls_back_to_the_applicants_email(self, session):
+        from app.apply.run import resolve_user
+
+        _, me = self._two_accounts(session)
+        assert resolve_user(session, None, fallback_email="ME@example.com") is me
+
+    def test_explicit_email_wins(self, session):
+        from app.apply.run import resolve_user
+
+        first, _ = self._two_accounts(session)
+        assert resolve_user(session, "first@example.com", fallback_email="me@example.com") is first
+
+    def test_no_match_still_asks_for_an_email(self, session, monkeypatch):
+        from app.apply import run
+
+        self._two_accounts(session)
+        monkeypatch.setattr("app.config.get_settings", lambda: type("S", (), {"email_to": ""})())
+        with pytest.raises(LookupError, match="pass --email"):
+            run.resolve_user(session, None, fallback_email="nobody@example.com")
+
+
+class TestLiveFormRules:
+    """Questions met on live forms (QRT, SK hynix, Astera Labs) in November 2026."""
+
+    def _answers(self, applicant, *questions):
+        from app.apply.answers import prepare_answers
+
+        parsed = parse_questions({"questions": list(questions)})
+        return {a.name: a for a in prepare_answers(parsed, applicant, company="Acme")}
+
+    def test_major_lands_on_the_closest_option(self, applicant):
+        options = ["Computer Science", "Computer Engineering", "Electrical and Electronic Engineering",
+                   "Finance", "Other"]
+        a = self._answers(applicant, q("q1", "Field of Study/Major", "multi_value_single_select",
+                                       values=options))["q1"]
+        assert a.value == "Computer Engineering"
+
+    def test_unrelated_majors_are_left_alone(self, applicant):
+        a = self._answers(applicant, q("q1", "Field of Study/Major", "multi_value_single_select",
+                                       values=["Finance", "Economics", "Physics"]))["q1"]
+        assert not a.answered
+
+    def test_onsite_requirement_follows_relocation(self, applicant):
+        label = ("This role requires you to work onsite 5 days a week at our San Jose location. "
+                 "Is that a requirement you can meet?")
+        a = self._answers(applicant, q("q1", label, "multi_value_single_select",
+                                       values=["Yes", "No"]))["q1"]
+        assert a.value == "Yes"
+
+    def test_legal_names_come_from_the_profile(self, applicant):
+        got = self._answers(applicant, q("q1", "Legal First Name"), q("q2", "Legal Last Name"))
+        assert (got["q1"].value, got["q2"].value) == ("Ada", "Lovelace")
+        assert got["q1"].source == "rule"
+
+    def test_pronouns_are_declined(self, applicant):
+        a = self._answers(applicant, q("q1", "What are your preferred pronouns?", "multi_value_single_select",
+                                       values=["She/Her", "He/Him", "They/Them", "Prefer not to say"]))["q1"]
+        assert a.value == "Prefer not to say"

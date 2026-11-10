@@ -32,7 +32,7 @@ DECLINE = re.compile(
 ACKNOWLEDGE = re.compile(r"acknowledg|confirm|agree|accept|i understand|i have read|^yes\b", re.I)
 DEMOGRAPHIC = re.compile(
     r"gender|\brace\b|ethnic|hispanic|latin[oax]|veteran|disabilit|sexual orientation|"
-    r"transgender|lgbt",
+    r"transgender|lgbt|pronoun",
     re.IGNORECASE,
 )
 MONTHS = (
@@ -148,6 +148,34 @@ def graduation_option(options: list[str], profile: ApplicantProfile) -> str | No
 # ---------------------------------------------------------------- rules
 
 
+_FILLER = {"and", "of", "in", "the", "with"}
+
+
+def closest_option(options: list[str], wanted: str, floor: float = 0.5) -> str | None:
+    """The option sharing the most words with ``wanted`` (Jaccard), if close enough.
+
+    For long institutional lists that never carry the applicant's exact
+    wording: "Electrical and Computer Engineering" lands on "Computer
+    Engineering" rather than nothing.
+    """
+
+    def words(text: str) -> set[str]:
+        return {w for w in re.findall(r"[a-z]+", norm(text).lower()) if w not in _FILLER}
+
+    target = words(wanted)
+    if not target:
+        return None
+    best, best_score = None, 0.0
+    for option in options:
+        have = words(option)
+        if not have:
+            continue
+        score = len(target & have) / len(target | have)
+        if score > best_score:
+            best, best_score = option, score
+    return best if best_score >= floor else None
+
+
 def _text_or_option(q: Question, text: str | None) -> str | list[str] | None:
     if text in (None, ""):
         return None
@@ -187,6 +215,11 @@ def rule_answer(q: Question, p: ApplicantProfile, company: str = "") -> tuple[An
     if "relocat" in label and p.willing_to_relocate is not None:
         return (_choice(q, yes_no(options, p.willing_to_relocate)) if is_choice
                 else ("Yes" if p.willing_to_relocate else "No")), ""
+    # "This role is onsite 5 days a week in San Jose -- can you meet that?"
+    if is_choice and p.willing_to_relocate and re.search(
+        r"\bon-?site\b|\bin[- ](?:the )?office\b|\bin[- ]person\b", label
+    ):
+        return _choice(q, yes_no(options, True)), "onsite"
 
     if "linkedin" in label:
         return _text_or_option(q, p.linkedin), ""
@@ -195,6 +228,10 @@ def rule_answer(q: Question, p: ApplicantProfile, company: str = "") -> tuple[An
     if re.search(r"website|portfolio|personal (?:site|url|page)", label):
         return _text_or_option(q, p.website or p.github), ""
 
+    if re.search(r"legal first name|first name \(legal\)", label) and not is_choice:
+        return p.first_name, ""
+    if re.search(r"legal last name|last name \(legal\)|legal surname", label) and not is_choice:
+        return p.last_name, ""
     if re.search(r"full (?:legal )?name|signature|type your name", label) and not is_choice:
         return p.full_name, ""
     if re.search(r"preferred (?:first )?name", label) and not is_choice:
@@ -214,7 +251,12 @@ def rule_answer(q: Question, p: ApplicantProfile, company: str = "") -> tuple[An
             return _choice(q, graduation_option(options, p)), "check the term"
         return p.graduation, ""
     if re.search(r"\bmajor\b|discipline|field of study|area of study|concentration", label):
-        return _text_or_option(q, p.discipline), ""
+        value = _text_or_option(q, p.discipline)
+        if value is None and is_choice:
+            closest = closest_option(options, p.discipline)
+            if closest is not None:
+                return _choice(q, closest), "closest option to your major"
+        return value, ""
 
     if re.search(r"start date|available to start|earliest.*start|when can you start", label) and not is_choice:
         return p.earliest_start or None, ""

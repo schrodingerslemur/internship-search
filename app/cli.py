@@ -386,7 +386,7 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         return 1
 
     def on_submitted(draft) -> bool:
-        return mark_applied(draft, args.email)
+        return mark_applied(draft, args.email, profile.email)
 
     if args.job:
         form = greenhouse.identify(args.job)
@@ -412,7 +412,7 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         print("Preparing today's applications...")
         with session_scope() as session, LlmClient(max_calls=3 * profile.daily_cap) as llm:
             try:
-                user = resolve_user(session, args.email)
+                user = resolve_user(session, args.email, fallback_email=profile.email)
             except LookupError as exc:
                 print(exc, file=sys.stderr)
                 return 1
