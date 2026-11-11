@@ -44,7 +44,9 @@ concurrency:
 jobs:
   apply:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Generous: a form that emails a security code is held open up to 15
+    # minutes while you type the code into the dashboard.
+    timeout-minutes: 90
     env:
       TZ: America/New_York
       DATABASE_URL: ${{ secrets.DATABASE_URL }}

@@ -1,5 +1,31 @@
 {% extends "base.html" %}
-{% block title %}Auto-apply · Internship Search{% endblock %}
+{% block title %}Auto-apply · Internship Search<script>
+// While the agent is working, refresh when its state changes (a code request
+// appears, an application finishes) -- but never under someone typing.
+(() => {
+  const start = {{ pending | tojson }};
+  let last = JSON.stringify(start);
+  if (!(start.queued + start.running + start.waiting_code)) return;
+  const typing = () => {
+    const a = document.activeElement;
+    if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) return true;
+    return [...document.querySelectorAll('.ask input, .ask textarea, .ask select, textarea')]
+      .some(e => e.value && e.defaultValue !== e.value);
+  };
+  const timer = setInterval(async () => {
+    if (document.hidden) return;
+    try {
+      const r = await fetch('/autoapply/pending', {headers: {Accept: 'application/json'}});
+      if (!r.ok) return;
+      const now = await r.json(), key = JSON.stringify(now);
+      if (key !== last && !typing()) location.reload();
+      if (!(now.queued + now.running + now.waiting_code)) clearInterval(timer);
+      last = key;
+    } catch (e) {}
+  }, 6000);
+})();
+</script>
+{% endblock %}
 {% block content %}
 <style>
 .aa{max-width:760px;margin:0 auto}
@@ -21,6 +47,8 @@
 .ask input,.ask select,.ask textarea{width:100%;font:inherit;font-size:14px;padding:7px 9px;border-radius:8px;
  border:1px solid var(--line);background:var(--bg);color:var(--text)}
 .hint{font-size:12px;color:var(--dim)}
+.need.code{border-color:var(--bad);margin-top:16px}
+.need.code input{font:600 20px/1.2 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:2px;max-width:260px}
 details.sent{font-size:13px;margin-top:4px}
 details.sent summary{cursor:pointer;color:var(--accent);list-style:none}
 details.sent table{width:100%;border-collapse:collapse;margin-top:6px}
@@ -36,12 +64,26 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
  .ask input,.ask select,.ask textarea{font-size:16px}}
 </style>
 
+{% set codes = tasks|selectattr('status', 'equalto', 'waiting_code')|list %}
 {% set needs = tasks|selectattr('status', 'equalto', 'needs_you')|list %}
-{% set rest = tasks|rejectattr('status', 'equalto', 'needs_you')|list %}
+{% set rest = tasks|rejectattr('status', 'in', ['needs_you', 'waiting_code'])|list %}
 
 <div class="aa">
   <h1>Auto-apply</h1>
   <div class="sub"><a href="/swipe">← Back to swiping</a></div>
+
+  {% for t in codes %}
+  <div class="need code">
+    <div class="co">{{ t.job.company_name }}</div>
+    <div class="ti"><b>{{ t.job.title }}</b></div>
+    <div class="why">{{ t.detail }} Check {{ applicant_email or 'your email' }}; the form is held open for 15 minutes.</div>
+    <form class="ask" method="post" action="/autoapply/task/{{ t.id }}/code">
+      <input name="code" required autofocus autocomplete="one-time-code" autocapitalize="off" spellcheck="false"
+             maxlength="20" placeholder="Security code" aria-label="Security code">
+      <button class="btn sm primary" type="submit">Submit code</button>
+    </form>
+  </div>
+  {% endfor %}
 
   {% if needs %}
   <h2>Needs you ({{ needs|length }})</h2>
@@ -129,4 +171,30 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
     </form>
   </details>
 </div>
+<script>
+// While the agent is working, refresh when its state changes (a code request
+// appears, an application finishes) -- but never under someone typing.
+(() => {
+  const start = {{ pending | tojson }};
+  let last = JSON.stringify(start);
+  if (!(start.queued + start.running + start.waiting_code)) return;
+  const typing = () => {
+    const a = document.activeElement;
+    if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) return true;
+    return [...document.querySelectorAll('.ask input, .ask textarea, .ask select, textarea')]
+      .some(e => e.value && e.defaultValue !== e.value);
+  };
+  const timer = setInterval(async () => {
+    if (document.hidden) return;
+    try {
+      const r = await fetch('/autoapply/pending', {headers: {Accept: 'application/json'}});
+      if (!r.ok) return;
+      const now = await r.json(), key = JSON.stringify(now);
+      if (key !== last && !typing()) location.reload();
+      if (!(now.queued + now.running + now.waiting_code)) clearInterval(timer);
+      last = key;
+    } catch (e) {}
+  }, 6000);
+})();
+</script>
 {% endblock %}

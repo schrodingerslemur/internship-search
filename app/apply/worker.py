@@ -33,13 +33,14 @@ from app.apply.cloud import (
     prune_screenshots,
     readiness,
     submitted_since,
+    take_code,
 )
 from app.apply.run import draft_for
 from app.config import get_settings
 from app.db import session_scope
 from app.logging_setup import get_logger
 from app.models import ApplicantRecord, ApplyTask, Job, User
-from app.models.autoapply import FAILED, NEEDS_YOU, QUEUED, SUBMITTED
+from app.models.autoapply import FAILED, NEEDS_YOU, QUEUED, RUNNING, SUBMITTED, WAITING_CODE
 from app.models.base import JobStatus, utcnow
 
 log = get_logger("autoapply.worker")
@@ -175,14 +176,21 @@ def _fill_and_submit(draft: Draft, profile, *, dry_run: bool, task_id: int) -> O
                 return Outcome(NEEDS_YOU, "Could not find the Submit button.", _shot(page))
             button.scroll_into_view_if_needed()
             button.click()
-            return _await_result(page, profile, submitted_at)
+            return _await_result(page, profile, submitted_at, task_id=task_id)
         finally:
             browser.close()
 
 
-def _await_result(page, profile, submitted_at: datetime, timeout_s: float = 60) -> Outcome:
+#: How long the form is held open for the user to type in an emailed code.
+CODE_WAIT_S = 15 * 60
+CODE_POLL_S = 4
+#: Wrong codes the user may retype before the task is handed back.
+CODE_TRIES = 3
+
+
+def _await_result(page, profile, submitted_at: datetime, timeout_s: float = 60, *, task_id: int | None = None) -> Outcome:
     deadline = time.monotonic() + timeout_s
-    code_tried = False
+    codes_entered = 0
     while time.monotonic() < deadline:
         page.wait_for_timeout(2000)
         try:
@@ -193,25 +201,79 @@ def _await_result(page, profile, submitted_at: datetime, timeout_s: float = 60) 
             return Outcome(SUBMITTED, "Submitted; Greenhouse confirmed it.", _shot(page, full=False))
         if _visible(page, 'iframe[title*="challenge" i]'):
             return Outcome(NEEDS_YOU, "Greenhouse showed a CAPTCHA challenge; submit this one yourself.", _shot(page))
-        if SECURITY_CODE.search(text) and not code_tried:
-            code_tried = True
-            from app.apply.inbox import wait_for_security_code
-
-            code = wait_for_security_code(since=submitted_at)
+        if SECURITY_CODE.search(text) and _code_box_visible(page):
+            if codes_entered >= CODE_TRIES:
+                return Outcome(NEEDS_YOU, "Greenhouse did not accept the security codes entered.", _shot(page))
+            retry = codes_entered > 0
+            code = _wait_for_code(task_id, submitted_at, retry=retry)
             if not code:
                 return Outcome(
                     NEEDS_YOU,
-                    "Greenhouse emailed you a security code and the worker has no inbox access "
-                    "(set APPLY_IMAP_* or SMTP_* secrets), or the email did not arrive in time.",
+                    "Greenhouse emailed you a security code and none was entered within "
+                    f"{CODE_WAIT_S // 60} minutes. Retry, and enter the code when it asks.",
                     _shot(page),
                 )
             _enter_code(page, code)
+            codes_entered += 1
+            # Give the code time to be checked before looking for the prompt again.
+            page.wait_for_timeout(6000)
             deadline = time.monotonic() + timeout_s
             continue
         errors = _errors(page)
         if errors:
             return Outcome(NEEDS_YOU, "The form rejected it: " + "; ".join(errors[:3]), _shot(page))
     return Outcome(NEEDS_YOU, "No confirmation appeared after clicking Submit.", _shot(page))
+
+
+def _code_box_visible(page) -> bool:
+    return _visible(page, 'input[id^="security-input"], input[maxlength="1"], '
+                          'input[id*="security" i], input[autocomplete="one-time-code"]')
+
+
+def _wait_for_code(task_id: int | None, submitted_at: datetime, *, retry: bool) -> str | None:
+    """The emailed code: typed by the user on the status page, or read from the inbox.
+
+    The task shows as "Code needed" meanwhile, with a box for the code. The
+    inbox is only a shortcut when mail credentials are set; the dashboard
+    works without them.
+    """
+    from app.apply.inbox import credentials, wait_for_security_code
+
+    if task_id is not None:
+        _set_waiting(task_id, "That code was not accepted. Enter the newest code Greenhouse emailed you."
+                     if retry else "Greenhouse emailed you a security code. Enter it here.")
+    has_inbox = credentials() is not None and not retry
+    deadline = time.monotonic() + CODE_WAIT_S
+    next_inbox = time.monotonic()
+    try:
+        while time.monotonic() < deadline:
+            if task_id is not None:
+                with session_scope() as session:
+                    code = take_code(session, task_id)
+                if code:
+                    return code
+            if has_inbox and time.monotonic() >= next_inbox:
+                code = wait_for_security_code(since=submitted_at, timeout_s=1, poll_s=1)
+                if code:
+                    return code
+                next_inbox = time.monotonic() + 20
+            if task_id is None and not has_inbox:
+                return None
+            time.sleep(CODE_POLL_S)
+        return None
+    finally:
+        if task_id is not None:
+            _set_waiting(task_id, None)
+
+
+def _set_waiting(task_id: int, detail: str | None) -> None:
+    """Show (detail given) or clear the "Code needed" state on the task."""
+    with session_scope() as session:
+        task = session.get(ApplyTask, task_id)
+        if detail is not None:
+            task.status, task.detail = WAITING_CODE, detail
+        elif task.status == WAITING_CODE:
+            task.status, task.detail = RUNNING, None
 
 
 def _visible(page, selector: str) -> bool:
@@ -268,6 +330,7 @@ def _shot(page, *, full: bool = True) -> bytes | None:
 def _store_answers(task_id: int, draft: Draft) -> None:
     with session_scope() as session:
         task = session.get(ApplyTask, task_id)
+        task.left_for_you = []
         task.answers = [
             {
                 "label": a.label,

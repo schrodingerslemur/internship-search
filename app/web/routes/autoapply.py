@@ -49,6 +49,7 @@ def _summary(db: Session, user: User) -> dict:
         "open": counts.get(cloud.QUEUED, 0) + counts.get(cloud.RUNNING, 0),
         "applied": counts.get(cloud.SUBMITTED, 0),
         "needs_you": counts.get(cloud.NEEDS_YOU, 0),
+        "codes": counts.get(cloud.WAITING_CODE, 0),
     }
 
 
@@ -116,6 +117,7 @@ def swipe_decide(
 @router.get("/autoapply", response_class=HTMLResponse)
 def autoapply_page(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)):
     record = cloud.get_record(db, user)
+    counts = cloud.queue_counts(db, user)
     flash = request.query_params.get("done")
     return templates.TemplateResponse(
         request,
@@ -126,6 +128,10 @@ def autoapply_page(request: Request, db: Session = Depends(get_db), user: User =
             "record": record,
             "problems": cloud.readiness(record),
             "profile_json": cloud.profile_json(record),
+            "applicant_email": (record.data or {}).get("email") if record else None,
+            "pending": {
+                k: counts.get(k, 0) for k in (cloud.QUEUED, cloud.RUNNING, cloud.WAITING_CODE)
+            },
             "flash": {"text": flash, "bad": request.query_params.get("bad") == "1"} if flash else None,
         },
     )
@@ -195,6 +201,29 @@ async def autoapply_answers(
     db.commit()
     background.add_task(_wake_worker)
     return RedirectResponse(f"/autoapply?done={quote('Saved. Applying again')}", 303)
+
+
+@router.post("/autoapply/task/{task_id}/code")
+def autoapply_code(
+    task_id: int,
+    code: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """The security code Greenhouse emailed; the waiting worker enters it."""
+    task = _own_task(db, user, task_id)
+    if not cloud.give_code(db, task, code):
+        db.rollback()
+        return RedirectResponse(f"/autoapply?bad=1&done={quote('It is no longer waiting for a code')}", 303)
+    db.commit()
+    return RedirectResponse(f"/autoapply?done={quote('Code sent. Submitting')}", 303)
+
+
+@router.get("/autoapply/pending")
+def autoapply_pending(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Tiny poll for the status page: which tasks are mid-flight right now."""
+    counts = cloud.queue_counts(db, user)
+    return JSONResponse({k: counts.get(k, 0) for k in (cloud.QUEUED, cloud.RUNNING, cloud.WAITING_CODE)})
 
 
 @router.post("/autoapply/task/{task_id}/done")

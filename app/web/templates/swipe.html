@@ -75,6 +75,7 @@
   <div class="sw-head">
     <h1>Swipe</h1>
     <div class="sw-stat" id="stat">
+      <a class="needs" id="code-pill" href="/autoapply" {% if not summary.codes %}hidden{% endif %}>Enter code</a>
       {% if summary.needs_you %}<a class="needs" href="/autoapply">{{ summary.needs_you }} need{{ 's' if summary.needs_you == 1 }} you</a>{% endif %}
       <a href="/autoapply"><span id="open-n">{{ summary.open }}</span> applying · {{ summary.applied }} applied</a>
     </div>
@@ -93,6 +94,27 @@
   <div class="keys">← pass · → apply · A already applied · Z undo</div>
 </div>
 
+<script>
+// A code request is time-boxed (the agent holds the form open), so surface it
+// here too. Polls only while something is in flight, and only when visible.
+(() => {
+  const pill = document.getElementById('code-pill');
+  let busy = {{ (summary.open + summary.codes) | tojson }};
+  async function check() {
+    if (document.hidden || !busy) return;
+    try {
+      const r = await fetch('/autoapply/pending', {headers: {Accept: 'application/json'}});
+      if (!r.ok) return;
+      const n = await r.json();
+      busy = n.queued + n.running + n.waiting_code;
+      pill.hidden = !n.waiting_code;
+      if (n.waiting_code && navigator.vibrate) navigator.vibrate(30);
+    } catch (e) {}
+  }
+  setInterval(check, 10000);
+  document.addEventListener('visibilitychange', check);
+})();
+</script>
 <script id="deck-data" type="application/json">{{ cards|tojson }}</script>
 <script>
 (function () {

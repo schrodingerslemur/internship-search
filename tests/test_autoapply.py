@@ -427,6 +427,55 @@ class TestPages:
         assert not any(s.applies_to("Describe your thesis") for s in profile.standing_answers)
 
 
+class TestSecurityCode:
+    def test_typed_code_reaches_the_waiting_worker_once(self, signed_in, session, account):
+        task = cloud.enqueue(session, account, make_job(session, 1))
+        session.commit()
+        refused = signed_in.post(f"/autoapply/task/{task.id}/code", data={"code": "AB12CD34"})
+        assert "bad=1" in refused.headers["location"]  # not waiting yet
+
+        task.status = cloud.WAITING_CODE
+        session.commit()
+        page = signed_in.get("/autoapply")
+        assert "Submit code" in page.text and 'autocomplete="one-time-code"' in page.text
+        assert signed_in.get("/autoapply/pending").json()["waiting_code"] == 1
+
+        ok = signed_in.post(f"/autoapply/task/{task.id}/code", data={"code": " AB12 CD34 "})
+        assert "bad" not in ok.headers["location"]
+        assert cloud.take_code(session, task.id) == "AB12CD34"
+        assert cloud.take_code(session, task.id) is None
+
+    def test_worker_waits_for_the_code_then_resumes(self, session, account, worker_db, monkeypatch):
+        from app.services.appconfig import set_config
+
+        task = cloud.enqueue(session, account, make_job(session, 1))
+        task.status = RUNNING
+        set_config(session, cloud.code_key(task.id), "XY98ZW76")
+        session.commit()
+        monkeypatch.setattr(worker, "CODE_POLL_S", 0)
+        monkeypatch.setattr("app.apply.inbox.credentials", lambda: None)
+
+        assert worker._wait_for_code(task.id, utcnow(), retry=False) == "XY98ZW76"
+        session.expire_all()
+        assert session.get(ApplyTask, task.id).status == RUNNING
+
+    def test_no_code_in_time_hands_it_back(self, session, account, worker_db, monkeypatch):
+        task = cloud.enqueue(session, account, make_job(session, 1))
+        task.status = RUNNING
+        session.commit()
+        monkeypatch.setattr(worker, "CODE_WAIT_S", 0)
+        monkeypatch.setattr("app.apply.inbox.credentials", lambda: None)
+        assert worker._wait_for_code(task.id, utcnow(), retry=False) is None
+        session.expire_all()
+        assert session.get(ApplyTask, task.id).status == RUNNING
+
+    def test_a_dead_worker_does_not_leave_it_waiting_forever(self, session, account):
+        task = cloud.enqueue(session, account, make_job(session, 1))
+        task.status, task.started_at = cloud.WAITING_CODE, utcnow() - timedelta(hours=2)
+        session.flush()
+        assert cloud.claim_next(session).id == task.id
+
+
 def test_discipline_lands_on_the_nearest_fixed_option():
     from app.apply.browser import _discipline_option
 

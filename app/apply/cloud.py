@@ -29,6 +29,7 @@ from app.models.autoapply import (
     QUEUED,
     RUNNING,
     SUBMITTED,
+    WAITING_CODE,
 )
 from app.models.base import JobStatus, Priority, utcnow
 from app.services import user_jobs
@@ -317,6 +318,32 @@ def prune_screenshots(session: Session, *, older_than: timedelta = timedelta(day
     return result.rowcount or 0
 
 
+def code_key(task_id: int) -> str:
+    return f"autoapply.code.{task_id}"
+
+
+def give_code(session: Session, task: ApplyTask, code: str) -> bool:
+    """Hand the worker the security code the user typed in."""
+    code = re.sub(r"\s+", "", code or "")
+    if task.status != WAITING_CODE or not code or len(code) > 20:
+        return False
+    from app.services.appconfig import set_config
+
+    set_config(session, code_key(task.id), code)
+    session.flush()
+    return True
+
+
+def take_code(session: Session, task_id: int) -> str | None:
+    """The typed code, if any, consumed so it is entered only once."""
+    from app.services.appconfig import get_config, set_config
+
+    code = get_config(session, code_key(task_id))
+    if code:
+        set_config(session, code_key(task_id), "")
+    return code or None
+
+
 def queue_counts(session: Session, user: User) -> dict[str, int]:
     rows = session.execute(
         select(ApplyTask.status, func.count())
@@ -337,7 +364,8 @@ def claim_next(
     now = now or utcnow()
     for stale in session.scalars(
         select(ApplyTask).where(
-            ApplyTask.status == RUNNING, ApplyTask.started_at < now - STALE_RUNNING
+            ApplyTask.status.in_((RUNNING, WAITING_CODE)),
+            ApplyTask.started_at < now - STALE_RUNNING,
         )
     ):
         stale.status = QUEUED if stale.attempts < 2 else FAILED
@@ -536,4 +564,5 @@ STATUS_LABELS = {
     NEEDS_YOU: ("Needs you", "bad"),
     FAILED: ("Couldn't apply", "dim"),
     CANCELLED: ("Cancelled", "dim"),
+    WAITING_CODE: ("Code needed", "bad"),
 }

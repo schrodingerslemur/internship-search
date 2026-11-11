@@ -257,6 +257,10 @@ def fill_education(page, profile: ApplicantProfile) -> list[str]:
     end_year = _by_id(page, "end-year--0", "input")
     if profile.graduation_year and end_year.count():
         end_year.fill(str(profile.graduation_year))
+    start_year = _by_id(page, "start-year--0", "input")
+    first = profile.education_start_year or (profile.graduation_year and profile.graduation_year - 4)
+    if first and start_year.count():
+        start_year.fill(str(first))
     return missed
 
 

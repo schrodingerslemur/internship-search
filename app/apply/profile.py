@@ -63,6 +63,8 @@ class ApplicantProfile:
     graduation: str = ""
     graduation_month: int | None = None
     graduation_year: int | None = None
+    #: First year of the current degree; four years before graduation if unset.
+    education_start_year: int | None = None
 
     us_citizen: bool | None = None
     work_authorized_us: bool | None = None

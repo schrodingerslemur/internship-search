@@ -35,8 +35,11 @@ NEEDS_YOU = "needs_you"
 FAILED = "failed"
 #: The user withdrew the swipe before the worker reached it.
 CANCELLED = "cancelled"
+#: Submitted, and Greenhouse emailed a security code: the worker holds the
+#: form open while the user types the code into the dashboard.
+WAITING_CODE = "waiting_code"
 
-OPEN_STATUSES = (QUEUED, RUNNING)
+OPEN_STATUSES = (QUEUED, RUNNING, WAITING_CODE)
 
 
 class ApplyTask(Base, TimestampMixin):
