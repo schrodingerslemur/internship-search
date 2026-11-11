@@ -168,6 +168,35 @@ def autoapply_retry(
     return RedirectResponse(f"/autoapply?done={quote('Queued again')}", 303)
 
 
+@router.post("/autoapply/task/{task_id}/answers")
+async def autoapply_answers(
+    task_id: int,
+    request: Request,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """The user answered what the agent could not; remember it and retry."""
+    task = _own_task(db, user, task_id)
+    form = await request.form()
+    replies = {}
+    for key, label in form.multi_items():
+        if key.startswith("label_") and isinstance(label, str):
+            answer = form.get("answer_" + key[len("label_"):])
+            if isinstance(answer, str) and answer.strip():
+                replies[label] = answer
+    if not replies:
+        return RedirectResponse(f"/autoapply?bad=1&done={quote('Type an answer first')}", 303)
+    try:
+        cloud.remember_answers(db, user, replies)
+    except (TypeError, ValueError) as exc:
+        return RedirectResponse(f"/autoapply?bad=1&done={quote('Not saved: ' + str(exc)[:120])}", 303)
+    cloud.enqueue(db, user, cloud.lean_job(db, task.job_id))
+    db.commit()
+    background.add_task(_wake_worker)
+    return RedirectResponse(f"/autoapply?done={quote('Saved. Applying again')}", 303)
+
+
 @router.post("/autoapply/task/{task_id}/done")
 def autoapply_done(task_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
     """The user finished a handed-back application by hand."""

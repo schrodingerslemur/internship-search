@@ -136,7 +136,11 @@ def _process(task_id: int, answerer, *, dry_run: bool) -> Outcome:
 
         if draft.unresolved:
             labels = [a.label for a in draft.unresolved]
-            _store_left(task_id, labels)
+            # Enough of each question for the status page to ask it there.
+            _store_left(task_id, [
+                {"label": a.label, "type": a.type, "options": a.options[:100]}
+                for a in draft.unresolved
+            ])
             return Outcome(
                 NEEDS_YOU, f"{len(labels)} required question(s) it would not answer for you."
             )
@@ -276,7 +280,7 @@ def _store_answers(task_id: int, draft: Draft) -> None:
         ]
 
 
-def _store_left(task_id: int, labels: list[str]) -> None:
+def _store_left(task_id: int, labels: list) -> None:
     with session_scope() as session:
         session.get(ApplyTask, task_id).left_for_you = labels
 

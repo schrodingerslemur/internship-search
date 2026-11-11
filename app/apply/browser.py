@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.apply.answers import DECLINE, DEMOGRAPHIC, Answer, Draft, norm
+from app.apply.answers import DECLINE, DEMOGRAPHIC, Answer, Draft, closest_option, norm, pick_option
 from app.apply.profile import ApplicantProfile, apply_dir
 
 CONFIRMED = re.compile(
@@ -175,6 +175,91 @@ def _fill_one(page, answer: Answer) -> bool:
     return False
 
 
+def _menu_texts(page, element_id: str) -> list[str]:
+    box = _by_id(page, element_id, "input")
+    box.scroll_into_view_if_needed()
+    box.click()
+    scoped = _options_for(element_id)
+    try:
+        page.locator(scoped).first.wait_for(state="visible", timeout=4000)
+    except Exception:
+        return []
+    _settle(page)
+    texts = page.locator(scoped).all_inner_texts()
+    box.press("Escape")
+    return [t.strip() for t in texts]
+
+
+def _search_and_pick(page, element_id: str, text: str, timeout_s: float = 8) -> bool:
+    """Type into a server-searched combobox and click the exact match.
+
+    The school list is fetched per keystroke, so the menu first shows stale
+    options; poll until the wanted one arrives rather than reading once.
+    """
+    box = _by_id(page, element_id, "input")
+    if box.count() == 0:
+        return False
+    box.scroll_into_view_if_needed()
+    box.click()
+    box.fill(text)
+    target = norm(text)
+    options = page.locator(_options_for(element_id))
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        texts = [norm(t) for t in options.all_inner_texts()]
+        if target in texts:
+            options.nth(texts.index(target)).click()
+            _settle(page)
+            return True
+        page.wait_for_timeout(300)
+    box.press("Escape")
+    return False
+
+
+def _discipline_option(options: list[str], discipline: str) -> str | None:
+    """The fixed-list discipline nearest the applicant's major.
+
+    Greenhouse's list has "Engineering" and "Computer Science" but no
+    "Electrical and Computer Engineering": an option the major contains wins,
+    then word overlap, then the list's own catch-all.
+    """
+    want = norm(discipline)
+    exact = next((o for o in options if norm(o) == want), None)
+    if exact:
+        return exact
+    inside = [o for o in options if re.search(rf"\b{re.escape(norm(o))}\b", want)]
+    if inside:
+        return max(inside, key=len)
+    return closest_option(options, discipline, floor=0.3) or pick_option(options, r"^other$", r"unknown")
+
+
+def fill_education(page, profile: ApplicantProfile) -> list[str]:
+    """The Education block some boards add outside the question list.
+
+    It is not in the API's questions, but when present its School, Degree and
+    Discipline are required: comboboxes over Greenhouse's fixed lists, plus
+    free year fields. Returns the fields it could not set.
+    """
+    if _by_id(page, "school--0", "input").count() == 0:
+        return []
+    missed = []
+    if profile.school and not _search_and_pick(page, "school--0", profile.school):
+        if not _search_and_pick(page, "school--0", "Other"):
+            missed.append("School")
+    if profile.degree:
+        word = norm(profile.degree).split("'")[0].split()[0]
+        if not choose(page, "degree--0", None, pattern=re.compile(rf"^{re.escape(word)}")):
+            missed.append("Degree")
+    if profile.discipline and _by_id(page, "discipline--0", "input").count():
+        pick = _discipline_option(_menu_texts(page, "discipline--0"), profile.discipline)
+        if not (pick and choose(page, "discipline--0", pick)):
+            missed.append("Discipline")
+    end_year = _by_id(page, "end-year--0", "input")
+    if profile.graduation_year and end_year.count():
+        end_year.fill(str(profile.graduation_year))
+    return missed
+
+
 def _decline_remaining_demographics(page) -> list[str]:
     """Decline any demographic dropdown the question list did not describe.
 
@@ -208,6 +293,11 @@ def fill(page, draft: Draft, profile: ApplicantProfile) -> FillReport:
     # number is validated against the wrong country.
     if profile.country:
         choose(page, "country", profile.country)
+
+    try:
+        report.failed.extend(fill_education(page, profile))
+    except Exception:
+        report.failed.append("Education")
 
     for answer in draft.answers:
         if not answer.answered:

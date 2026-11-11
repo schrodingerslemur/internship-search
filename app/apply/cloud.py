@@ -8,6 +8,7 @@ fills the Greenhouse form and submits it, or hands it back with a reason.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, fields
 from datetime import datetime, timedelta
 
@@ -404,6 +405,34 @@ def save_record(
         record.resume_filename, record.resume_bytes = resume
     session.flush()
     return record
+
+
+def remember_answers(session: Session, user: User, replies: dict[str, str]) -> int:
+    """Save the user's typed replies as standing answers, keyed by the exact label.
+
+    Standing answers win over every rule and the model, so the retried form
+    gets these verbatim, and any later form asking the same question does too.
+    """
+    record = get_record(session, user)
+    if record is None:
+        return 0
+    data = dict(record.data or {})
+    standing = [s for s in data.get("standing_answers") or [] if isinstance(s, dict)]
+    saved = 0
+    for label, answer in replies.items():
+        label, answer = label.strip(), answer.strip()
+        if not label or not answer:
+            continue
+        match = rf"^\s*{re.escape(label)}\s*$"
+        standing = [s for s in standing if s.get("match") != match]
+        # Newest first: an exact-label answer beats any older broad pattern.
+        standing.insert(0, {"match": match, "answer": answer})
+        saved += 1
+    if saved:
+        data["standing_answers"] = standing
+        record.data = clean_profile_data(data)
+        session.flush()
+    return saved
 
 
 def clean_profile_data(raw: dict) -> dict:

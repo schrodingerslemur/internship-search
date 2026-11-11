@@ -227,7 +227,7 @@ class TestWorker:
         session.expire_all()
         done = session.get(ApplyTask, task.id)
         assert done.status == NEEDS_YOU
-        assert done.left_for_you == ["Describe your thesis"]
+        assert done.left_for_you == [{"label": "Describe your thesis", "type": "textarea", "options": []}]
 
     def test_a_confirmed_submission_marks_the_job_applied(self, session, account, worker_db, monkeypatch):
         task, job = self._queue(session, account)
@@ -399,6 +399,54 @@ class TestPages:
         task.screenshot = b"secret"
         session.flush()
         assert signed_in.get(f"/autoapply/task/{task.id}/screenshot").status_code == 404
+
+    def test_typed_answers_are_remembered_and_the_task_retried(self, signed_in, session, account):
+        cloud.save_record(session, account, data=PROFILE, resume=("cv.pdf", b"%PDF"))
+        task = cloud.enqueue(session, account, make_job(session, 1))
+        task.status = NEEDS_YOU
+        task.left_for_you = [
+            {"label": "Which team? (pick 2)", "type": "select", "options": ["Silicon", "Systems"]},
+            "Describe your thesis",
+        ]
+        session.flush()
+
+        page = signed_in.get("/autoapply")
+        assert "Save and apply" in page.text and "<option>Silicon</option>" in page.text
+
+        r = signed_in.post(
+            f"/autoapply/task/{task.id}/answers",
+            data={"label_1": "Which team? (pick 2)", "answer_1": "Silicon",
+                  "label_2": "Describe your thesis", "answer_2": ""},
+        )
+        assert r.status_code == 303 and "bad" not in r.headers["location"]
+        session.refresh(task)
+        assert task.status == QUEUED
+        profile = cloud.profile_from_record(cloud.get_record(session, account))
+        hit = [s.answer for s in profile.standing_answers if s.applies_to("Which team? (pick 2)")]
+        assert hit[0] == "Silicon"
+        assert not any(s.applies_to("Describe your thesis") for s in profile.standing_answers)
+
+
+def test_discipline_lands_on_the_nearest_fixed_option():
+    from app.apply.browser import _discipline_option
+
+    options = ["Computer Science", "Electronics", "Engineering", "Other"]
+    assert _discipline_option(options, "Electrical and Computer Engineering") == "Engineering"
+    assert _discipline_option(options, "Computer Science") == "Computer Science"
+    assert _discipline_option(["Art", "Other"], "Electrical Engineering") == "Other"
+
+
+def test_acknowledgements_and_the_careers_site_are_picked():
+    from app.apply.answers import rule_answer
+    from app.apply.greenhouse import Option, Question
+
+    profile = ApplicantProfile(**{k: v for k, v in PROFILE.items() if k != "standing_answers"})
+    export = Question(name="q", label="I have read and understand the Export Control statement",
+                      type="select", required=True, options=[Option("I acknowledge", "1")])
+    assert rule_answer(export, profile)[0] == "I acknowledge"
+    heard = Question(name="h", label="How did you hear about us?", type="select", required=True,
+                     options=[Option(x, x) for x in ["University careers fair", "Company website", "Other"]])
+    assert rule_answer(heard, profile)[0] == "Company website"
 
 
 def test_profile_dataclass_still_constructs_from_example():

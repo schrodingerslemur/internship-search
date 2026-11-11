@@ -261,7 +261,11 @@ def rule_answer(q: Question, p: ApplicantProfile, company: str = "") -> tuple[An
     if re.search(r"start date|available to start|earliest.*start|when can you start", label) and not is_choice:
         return p.earliest_start or None, ""
 
-    if re.search(r"privacy|notice at collection|data protection|gdpr|acknowledg|consent|certif|attest", label):
+    if re.search(
+        r"privacy|notice at collection|data protection|gdpr|acknowledg|consent|certif|attest|"
+        r"i have read|read and understand|i understand|i agree",
+        label,
+    ):
         if is_choice:
             return _choice(q, pick_option(options, ACKNOWLEDGE.pattern)), "acknowledgement"
         return None, ""
@@ -269,7 +273,12 @@ def rule_answer(q: Question, p: ApplicantProfile, company: str = "") -> tuple[An
     if re.search(r"how did you (?:hear|find|learn)|where did you (?:hear|find|learn|see)|hear about", label):
         if is_choice:
             return _choice(q, pick_option(
-                options, r"career|company (?:web)?site|website", r"job board|online|internet", r"^other"
+                # "careers fair" is an event, not the careers site.
+                options,
+                r"company (?:web)?site|careers? (?:page|site|website)|website",
+                r"career(?!s? (?:fair|service|event|office|center|centre))",
+                r"job board|online|internet|linkedin",
+                r"^other",
             )), ""
         return f"{company} careers page" if company else "Company careers page", ""
 

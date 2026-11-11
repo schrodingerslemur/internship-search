@@ -16,6 +16,11 @@
 .need ul{margin:6px 0 0;padding-left:18px;font-size:13px}
 .need .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .need .acts form{margin:0}
+.ask{display:flex;flex-direction:column;gap:10px;margin-top:10px;align-items:flex-start}
+.ask label{display:flex;flex-direction:column;gap:4px;font-size:13px;width:100%}
+.ask input,.ask select,.ask textarea{width:100%;font:inherit;font-size:14px;padding:7px 9px;border-radius:8px;
+ border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.hint{font-size:12px;color:var(--dim)}
 details.sent{font-size:13px;margin-top:4px}
 details.sent summary{cursor:pointer;color:var(--accent);list-style:none}
 details.sent table{width:100%;border-collapse:collapse;margin-top:6px}
@@ -27,7 +32,8 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
  background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px}
 .prof .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}
 /* iOS Safari zooms the page into any field with text under 16px. */
-@media (max-width:640px){.prof textarea{font-size:16px;min-height:260px}.need .acts .btn{flex:1 1 auto;text-align:center}}
+@media (max-width:640px){.prof textarea{font-size:16px;min-height:260px}.need .acts .btn{flex:1 1 auto;text-align:center}
+ .ask input,.ask select,.ask textarea{font-size:16px}}
 </style>
 
 {% set needs = tasks|selectattr('status', 'equalto', 'needs_you')|list %}
@@ -44,7 +50,31 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
     <div class="co">{{ t.job.company_name }}</div>
     <div class="ti"><b>{{ t.job.title }}</b></div>
     <div class="why">{{ t.detail }}</div>
-    {% if t.left_for_you %}<ul>{% for label in t.left_for_you %}<li>{{ label }}</li>{% endfor %}</ul>{% endif %}
+    {% set asks = [] %}{% set files = [] %}
+    {% for item in t.left_for_you or [] %}
+      {% set q = item if item is mapping else {'label': item, 'type': 'text', 'options': []} %}
+      {% if q.type == 'file' %}{% set _ = files.append(q) %}{% else %}{% set _ = asks.append(q) %}{% endif %}
+    {% endfor %}
+    {% if asks %}
+    <form class="ask" method="post" action="/autoapply/task/{{ t.id }}/answers">
+      {% for q in asks %}
+      <label>{{ q.label }}
+        <input type="hidden" name="label_{{ loop.index }}" value="{{ q.label }}">
+        {% if q.options %}
+        <select name="answer_{{ loop.index }}"><option value="">Choose…</option>
+          {% for o in q.options %}<option>{{ o }}</option>{% endfor %}</select>
+        {% elif q.type == 'textarea' %}
+        <textarea name="answer_{{ loop.index }}" rows="3"></textarea>
+        {% else %}
+        <input type="text" name="answer_{{ loop.index }}" autocomplete="off">
+        {% endif %}
+      </label>
+      {% endfor %}
+      <button class="btn sm primary" type="submit">Save and apply</button>
+      <span class="hint">Remembered for every future form that asks the same.</span>
+    </form>
+    {% endif %}
+    {% if files %}<ul>{% for q in files %}<li>{{ q.label }} <span class="hint">(a file: upload it on the form)</span></li>{% endfor %}</ul>{% endif %}
     <div class="acts">
       <a class="btn sm primary" href="{{ t.form_url }}" target="_blank" rel="noopener">Open the form</a>
       <form method="post" action="/autoapply/task/{{ t.id }}/done"><button class="btn sm" type="submit">I applied</button></form>
