@@ -26,6 +26,11 @@ services:
       # The Neon connection string, pasted as given.
       - key: DATABASE_URL
         sync: false
+      # Fine-grained GitHub token, "Actions: read and write" on this repo only.
+      # Lets a right swipe start the auto-apply worker immediately; without it
+      # the worker runs once a day, right after the digest.
+      - key: GH_DISPATCH_TOKEN
+        sync: false
       # The GitHub Actions workflow owns the schedule. A second scheduler here
       # would send every digest twice.
       - key: SCHEDULER_ENABLED

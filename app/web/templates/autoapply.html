@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Auto-apply · Internship Search{% endblock %}
+{% block content %}
+<style>
+.aa{max-width:760px;margin:0 auto}
+.aa h2{font-size:15px;margin:24px 0 10px}
+.row{display:flex;gap:12px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)}
+.row .who{flex:1;min-width:0}
+.row .co{font-size:12.5px;color:var(--muted)}
+.row .ti{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .why{font-size:13px;color:var(--muted);margin-top:2px}
+.row .when{font-size:12px;color:var(--dim);white-space:nowrap}
+.st{font-size:12px;font-weight:600;white-space:nowrap}
+.st.ok{color:var(--ok)} .st.bad{color:var(--bad)} .st.warn{color:var(--warn)} .st.accent{color:var(--accent)} .st.dim{color:var(--dim)}
+.need{background:var(--panel);border:1px solid color-mix(in srgb,var(--bad) 45%,var(--line));border-radius:12px;padding:12px 14px;margin-bottom:10px}
+.need ul{margin:6px 0 0;padding-left:18px;font-size:13px}
+.need .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.need .acts form{margin:0}
+details.sent{font-size:13px;margin-top:4px}
+details.sent summary{cursor:pointer;color:var(--accent);list-style:none}
+details.sent table{width:100%;border-collapse:collapse;margin-top:6px}
+details.sent td{border-top:1px solid var(--line);padding:5px 6px;vertical-align:top}
+details.sent td.src{color:var(--dim);font-size:11.5px;white-space:nowrap}
+details.prof{margin-top:28px}
+details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
+.prof textarea{width:100%;min-height:300px;margin-top:10px;font:12.5px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;
+ background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px}
+.prof .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}
+/* iOS Safari zooms the page into any field with text under 16px. */
+@media (max-width:640px){.prof textarea{font-size:16px;min-height:260px}.need .acts .btn{flex:1 1 auto;text-align:center}}
+</style>
+
+{% set needs = tasks|selectattr('status', 'equalto', 'needs_you')|list %}
+{% set rest = tasks|rejectattr('status', 'equalto', 'needs_you')|list %}
+
+<div class="aa">
+  <h1>Auto-apply</h1>
+  <div class="sub"><a href="/swipe">← Back to swiping</a></div>
+
+  {% if needs %}
+  <h2>Needs you ({{ needs|length }})</h2>
+  {% for t in needs %}
+  <div class="need">
+    <div class="co">{{ t.job.company_name }}</div>
+    <div class="ti"><b>{{ t.job.title }}</b></div>
+    <div class="why">{{ t.detail }}</div>
+    {% if t.left_for_you %}<ul>{% for label in t.left_for_you %}<li>{{ label }}</li>{% endfor %}</ul>{% endif %}
+    <div class="acts">
+      <a class="btn sm primary" href="{{ t.form_url }}" target="_blank" rel="noopener">Open the form</a>
+      <form method="post" action="/autoapply/task/{{ t.id }}/done"><button class="btn sm" type="submit">I applied</button></form>
+      <form method="post" action="/autoapply/task/{{ t.id }}/retry"><button class="btn sm" type="submit">Retry</button></form>
+      {% if t.has_screenshot %}<a class="btn sm" href="/autoapply/task/{{ t.id }}/screenshot" target="_blank">Screenshot</a>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  {% if rest %}
+  <h2>Applications</h2>
+  {% for t in rest %}
+  {% set lab = labels[t.status] %}
+  <div class="row">
+    <div class="who">
+      <div class="co">{{ t.job.company_name }}</div>
+      <div class="ti">{{ t.job.title }}</div>
+      {% if t.status == 'failed' %}<div class="why">{{ t.detail }}</div>{% endif %}
+      {% if t.answers %}
+      <details class="sent"><summary>{{ 'What was sent' if t.status == 'submitted' else 'Prepared answers' }}{% if t.has_screenshot %} · <a href="/autoapply/task/{{ t.id }}/screenshot" target="_blank">screenshot</a>{% endif %}</summary>
+        <table>{% for a in t.answers %}<tr><td>{{ a.label }}</td>
+          <td>{{ a.value|join(', ') if a.value is iterable and a.value is not string else a.value }}</td>
+          <td class="src">{{ {'ai':'AI-written','rule':'rule','standing':'your answer','profile':'profile'}.get(a.source, a.source) }}</td></tr>{% endfor %}</table>
+      </details>
+      {% endif %}
+    </div>
+    <span class="when">{{ (t.submitted_at or t.queued_at)|timeago }}</span>
+    <span class="st {{ lab[1] }}">{{ lab[0] }}</span>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  {% if not tasks %}
+  <div class="empty"><div class="icon">🃏</div><h2>Nothing yet</h2>
+    <p>Swipe right on a job and the agent applies for you.</p>
+    <a class="btn primary" href="/swipe">Start swiping</a></div>
+  {% endif %}
+
+  <details class="prof" id="profile" {% if problems %}open{% endif %}>
+    <summary>Your details and resume {% if problems %}<span class="st bad">· not set up</span>{% else %}<span class="st ok">· ready</span>{% endif %}</summary>
+    {% if problems %}<p class="sub" style="margin:8px 0 0">Missing: {{ problems|join('; ') }}.</p>{% endif %}
+    <form class="prof" method="post" action="/autoapply/profile" enctype="multipart/form-data">
+      <textarea name="profile_json" spellcheck="false" aria-label="Your details (JSON)">{{ profile_json }}</textarea>
+      <p class="sub" style="margin:6px 0 0">Used on every form. <code>standing_answers</code> are your answers to recurring
+        questions. Anything required that isn't here or on your resume comes back to you, never guessed.</p>
+      <div class="bar">
+        <label class="sub" style="margin:0">Resume{% if record and record.resume_filename %} ({{ record.resume_filename }}){% endif %}:
+          <input type="file" name="resume" accept=".pdf,.doc,.docx"></label>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+  </details>
+</div>
+{% endblock %}

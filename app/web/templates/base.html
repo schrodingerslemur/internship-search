@@ -3,6 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{# "Add to Home Screen" opens full-screen straight onto Swipe. #}
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Internships">
+<meta name="theme-color" content="#171a21" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <title>{% block title %}Internship Search{% endblock %}</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
 <script src="/static/htmx.min.js" defer></script>
@@ -23,6 +32,7 @@
 *{box-sizing:border-box}
 .lbl-icon{display:none}
 .run-search-menu{display:none}
+.account-menu a.tracker-menu{display:none}
 nav details.account{position:relative;margin-left:10px}
 nav details.account summary{list-style:none;cursor:pointer;width:30px;height:30px;border-radius:50%;
  background:var(--accent-dim);color:var(--text);display:grid;place-items:center;font-size:13px;font-weight:700}
@@ -269,6 +279,9 @@ button:disabled,.btn:disabled{opacity:.55;cursor:not-allowed}
   .lbl-icon{display:inline;font-size:15px;line-height:1}
   .run-search-nav{display:none}
   .run-search-menu{display:block}
+  /* Five tabs do not fit at 375px; the tracker moves into the account menu. */
+  nav a.tab-tracker{display:none}
+  .account-menu a.tracker-menu{display:block}
   /* The wordmark is the least useful thing on a narrow screen; the rocket
      still identifies the app. */
   .brand-text{display:none}
@@ -543,6 +556,8 @@ ul.clean li{padding:3px 0;font-size:13px}
        Every page behind the nav passes `counts`. A page that does not renders
        the tabs unbadged rather than erroring. #}
     {% set nc = counts|default({}, true) %}
+    <a class="tab {% if request.url.path in ('/swipe', '/autoapply') %}active{% endif %}" href="/swipe"
+       {% if request.url.path=='/swipe' %}aria-current="page"{% endif %}>Swipe</a>
     <a class="tab {% if request.url.path=='/' %}active{% endif %}" href="/"
        {% if request.url.path=='/' %}aria-current="page"{% endif %}>Review<span
        id="nav-review-count">{% with n = nc.to_review, n_label = 'to review' %}{% include "partials/nav_count.html" %}{% endwith %}</span></a>
@@ -554,7 +569,7 @@ ul.clean li{padding:3px 0;font-size:13px}
        id="nav-applied-count">{% with n = nc.applied, n_label = 'applied' %}{% include "partials/nav_count.html" %}{% endwith %}</span></a>
     {# The tracker is where an application actually goes after it is sent, so it
        belongs beside the lists rather than buried in the account menu. #}
-    <a class="tab {% if request.url.path=='/tracker' %}active{% endif %}" href="/tracker"
+    <a class="tab tab-tracker {% if request.url.path=='/tracker' %}active{% endif %}" href="/tracker"
        {% if request.url.path=='/tracker' %}aria-current="page"{% endif %}>Tracker</a>
     <span class="spacer"></span>
     {# On a phone four tabs plus this button plus the avatar do not fit, and the
@@ -573,6 +588,8 @@ ul.clean li{padding:3px 0;font-size:13px}
         </form>
         {# Dismissed is an archive, not a stage you work through, so it sits
            here rather than taking a quarter of the main navigation. #}
+        <a href="/tracker" class="tracker-menu">Application tracker</a>
+        <a href="/autoapply">Auto-apply status</a>
         <a href="/dismissed">Dismissed jobs</a>
         <a href="/coverage">Search insights</a>
         <a href="/profile">Your profile</a>
@@ -677,7 +694,8 @@ ul.clean li{padding:3px 0;font-size:13px}
     // otherwise bury the page under its own confirmations. An unanswered
     // "why?" is spared the cull -- it is the one toast that is still asking
     // for something, and discarding it silently drops the answer.
-    Array.from(host.children).slice(0, -2)
+    // Newest toasts are inserted first (afterbegin), so the oldest are last.
+    Array.from(host.children).slice(2)
       .filter(t => !t.querySelector('.why'))
       .forEach(retire);
     const asking = !!toast.querySelector('.why');
@@ -694,6 +712,7 @@ ul.clean li{padding:3px 0;font-size:13px}
     host.prepend(toast);
     watch(toast);
   }
+  window.showToast = show;
 
   host.addEventListener('click', e => {
     if (e.target.classList.contains('dismiss')) retire(e.target.closest('.toast'));

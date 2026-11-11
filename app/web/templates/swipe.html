@@ -1,0 +1,297 @@
+{% extends "base.html" %}
+{% block title %}Swipe · Internship Search{% endblock %}
+{% block content %}
+<style>
+.sw{max-width:440px;margin:0 auto}
+.sw-head{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:32px}
+.sw-head h1{margin:0}
+.sw-stat{font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center}
+.sw-stat a{color:inherit}
+.sw-stat .needs{color:#fff;background:var(--bad);border-radius:20px;padding:2px 9px;font-weight:600}
+.sw-setup{display:block;margin-top:10px;font-size:13px;padding:9px 12px;border-radius:10px;
+ border:1px solid var(--warn);background:color-mix(in srgb,var(--warn) 10%,var(--panel));color:var(--text)}
+.deck{position:relative;height:clamp(360px,calc(100dvh - 260px),470px);margin:14px 0 18px;touch-action:pan-y}
+.card{position:absolute;inset:0;background:var(--panel);border:1px solid var(--line);border-radius:18px;
+ padding:18px;display:flex;flex-direction:column;gap:10px;overflow:hidden;user-select:none;-webkit-user-select:none;
+ box-shadow:0 8px 24px rgba(0,0,0,.18);transform-origin:50% 100%;
+ transition:transform .3s cubic-bezier(.2,.8,.2,1),opacity .3s ease;will-change:transform}
+.card.drag{transition:none;cursor:grabbing}
+.card[data-depth="1"]{transform:scale(.95) translateY(14px)}
+.card[data-depth="2"]{transform:scale(.90) translateY(28px);opacity:.6}
+.card[data-depth="1"] .in,.card[data-depth="2"] .in{opacity:0}
+.card .in{display:flex;flex-direction:column;gap:10px;flex:1;min-height:0;transition:opacity .2s ease}
+.card .hd{display:flex;gap:12px;align-items:flex-start}
+.card .co{font-size:13px;color:var(--muted);font-weight:600}
+.card .ti{font-size:20px;font-weight:700;line-height:1.25;margin-top:2px}
+.card .sc{margin-left:auto;flex:0 0 auto;font-size:13px;font-weight:700;border-radius:20px;padding:4px 10px;
+ background:color-mix(in srgb,var(--ok) 14%,var(--panel-2));color:var(--ok)}
+.card .facts{display:flex;flex-wrap:wrap;gap:6px}
+.card .facts span{font-size:12px;color:var(--muted);background:var(--panel-2);border-radius:20px;padding:3px 10px;
+ max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Reasons and summary give way first on a short screen; the footer never does. */
+.card .mid{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:10px;
+ -webkit-mask-image:linear-gradient(#000 78%,transparent);mask-image:linear-gradient(#000 78%,transparent)}
+.card .ft{flex-shrink:0;margin-top:auto}
+.card .ti{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.card .facts span.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 12%,var(--panel-2))}
+.card ul{margin:0;padding:0;list-style:none;display:grid;gap:5px;font-size:14px}
+.card li::before{content:"✓";color:var(--ok);font-weight:700;margin-right:7px}
+.card li.c::before{content:"!";color:var(--warn);margin-right:10px;margin-left:2px}
+.card .sum{font-size:13.5px;color:var(--muted)}
+.card .ft{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px}
+.card .ft button{background:none;border:0;color:var(--muted);font:inherit;cursor:pointer;padding:12px 0 12px 16px;margin:-12px 0;text-decoration:underline}
+.card .ft a{padding:12px 16px 12px 0;margin:-12px 0}
+.card .ft button:hover{color:var(--text)}
+.stamp{position:absolute;top:20px;padding:3px 12px;border:3px solid;border-radius:8px;font-weight:800;font-size:22px;
+ letter-spacing:.06em;opacity:0;pointer-events:none;background:var(--panel)}
+.stamp.yes{left:16px;color:var(--ok);transform:rotate(-10deg)}
+.stamp.no{right:16px;color:var(--bad);transform:rotate(10deg)}
+.ctl{display:flex;justify-content:center;align-items:center;gap:24px}
+.ctl button{border-radius:50%;border:1px solid var(--line);background:var(--panel);cursor:pointer;display:grid;
+ place-items:center;color:var(--text);box-shadow:0 4px 14px rgba(0,0,0,.14);transition:transform .1s ease;
+ -webkit-tap-highlight-color:transparent}
+.ctl button:active{transform:scale(.92)}
+.ctl .no{width:64px;height:64px;font-size:26px;color:var(--bad)}
+.ctl .yes{width:64px;height:64px;font-size:28px;color:var(--ok)}
+.ctl .undo{width:44px;height:44px;font-size:18px;color:var(--muted)}
+.ctl .undo:disabled{opacity:.35;cursor:default}
+.keys{text-align:center;font-size:12px;color:var(--dim);margin-top:14px}
+.done{position:absolute;inset:0;display:grid;place-content:center;text-align:center;color:var(--muted)}
+.done h2{color:var(--text);margin:0 0 6px}
+@media (max-width:640px){
+  /* The shared layout pads the bottom for the bulk-action bar, which this page
+     does not have; without this the page scrolls under a sideways swipe. */
+  main{padding-bottom:12px}
+  .keys{display:none}
+  .deck{height:clamp(330px,calc(100dvh - 215px),600px);margin:10px 0 14px}
+  .card{padding:16px}
+  .card .ti{font-size:19px}
+}
+.card,.ctl button,.card .ft *{-webkit-tap-highlight-color:transparent}
+@media (prefers-reduced-motion:reduce){.card,.card .in{transition:none}}
+</style>
+
+<div class="sw">
+  <div class="sw-head">
+    <h1>Swipe</h1>
+    <div class="sw-stat" id="stat">
+      {% if summary.needs_you %}<a class="needs" href="/autoapply">{{ summary.needs_you }} need{{ 's' if summary.needs_you == 1 }} you</a>{% endif %}
+      <a href="/autoapply"><span id="open-n">{{ summary.open }}</span> applying · {{ summary.applied }} applied</a>
+    </div>
+  </div>
+  {% if not ready %}
+    <a class="sw-setup" href="/autoapply#profile">Add your details and resume so the agent can apply →</a>
+  {% endif %}
+
+  <div class="deck" id="deck"></div>
+
+  <div class="ctl">
+    <button class="no" id="b-no" aria-label="Pass" title="Pass (←)">✕</button>
+    <button class="undo" id="b-undo" aria-label="Undo" title="Undo (Z)" disabled>↶</button>
+    <button class="yes" id="b-yes" aria-label="Apply" title="Apply (→)">✓</button>
+  </div>
+  <div class="keys">← pass · → apply · A already applied · Z undo</div>
+</div>
+
+<script id="deck-data" type="application/json">{{ cards|tojson }}</script>
+<script>
+(function () {
+  const deck = document.getElementById('deck');
+  const undoBtn = document.getElementById('b-undo');
+  const openN = document.getElementById('open-n');
+  const queue = JSON.parse(document.getElementById('deck-data').textContent);
+  const seen = new Set(queue.map(c => c.id));
+  const history = [];
+  let saving = Promise.resolve();   // decisions are sent in order, off the UI path
+  let fetching = false, exhausted = false, undoing = false;
+  const toast = (t) => window.showToast && window.showToast(t, true);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function build(c) {
+    const el = document.createElement('article');
+    el.className = 'card';
+    el.dataset.id = c.id;
+    const facts = c.facts.map(f => `<span>${esc(f)}</span>`).join('') +
+      (c.applied_before ? `<span class="warn">Applied to ${esc(c.company)} before</span>` : '');
+    const points = c.reasons.map(r => `<li>${esc(r)}</li>`).join('') + (c.concern ? `<li class="c">${esc(c.concern)}</li>` : '');
+    el.innerHTML = `<div class="stamp yes">APPLY</div><div class="stamp no">PASS</div>
+      <div class="in">
+        <div class="hd"><div><div class="co">${esc(c.company)}</div><div class="ti">${esc(c.title)}</div></div>
+          <div class="sc">${c.score}%</div></div>
+        ${facts ? `<div class="facts">${facts}</div>` : ''}
+        <div class="mid">${points ? `<ul>${points}</ul>` : ''}<div class="sum">${esc(c.summary)}</div></div>
+        <div class="ft">${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener" data-nodrag>View posting ↗</a>` : '<span></span>'}
+          <button type="button" data-nodrag data-applied>Already applied</button></div>
+      </div>`;
+    return el;
+  }
+
+  // Keep exactly the top three cards in the DOM; only depths change, so
+  // moving to the next card is a CSS transition, never a rebuild.
+  function layout() {
+    const els = [...deck.querySelectorAll('.card:not(.gone)')];
+    const want = queue.slice(0, 3).map(c => c.id);
+    els.forEach(el => { if (!want.includes(+el.dataset.id)) el.remove(); });
+    want.forEach((id, depth) => {
+      let el = deck.querySelector(`.card[data-id="${id}"]:not(.gone)`);
+      if (!el) { el = build(queue[depth]); el.dataset.depth = 2; deck.prepend(el); }
+      el.dataset.depth = depth;
+      el.style.zIndex = 10 - depth;
+      if (depth === 0) arm(el);
+    });
+    const empty = deck.querySelector('.done');
+    if (!queue.length && !empty) {
+      deck.insertAdjacentHTML('beforeend', `<div class="done"><div style="font-size:34px">🎉</div><h2>All caught up</h2>
+        <p>New matches arrive with each daily search.</p></div>`);
+    } else if (queue.length && empty) empty.remove();
+    undoBtn.disabled = !history.length;
+  }
+
+  function arm(el) {
+    if (el.dataset.armed) return;
+    el.dataset.armed = '1';
+    let x0 = null, y0 = 0, dx = 0, raf = 0;
+    const yes = el.querySelector('.stamp.yes'), no = el.querySelector('.stamp.no');
+    el.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || e.target.closest('[data-nodrag]') || el.dataset.depth !== '0') return;
+      x0 = e.clientX; y0 = e.clientY; dx = 0;
+      // Touch pointers are captured implicitly; capturing one explicitly too
+      // made a short flick swallow the next tap's click in Chrome on Android.
+      if (e.pointerType === 'mouse') el.setPointerCapture(e.pointerId);
+      el.classList.add('drag');
+    });
+    el.addEventListener('pointermove', e => {
+      if (x0 === null) return;
+      dx = e.clientX - x0; const dy = (e.clientY - y0) * .2;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        el.style.transform = `translate(${dx}px,${dy}px) rotate(${dx / 20}deg)`;
+        yes.style.opacity = Math.min(1, Math.max(0, dx / 80));
+        no.style.opacity = Math.min(1, Math.max(0, -dx / 80));
+      });
+    });
+    const end = () => {
+      if (x0 === null) return;
+      x0 = null; cancelAnimationFrame(raf); el.classList.remove('drag');
+      if (Math.abs(dx) > 90) decide(dx > 0 ? 'yes' : 'no');
+      else { el.style.transform = ''; yes.style.opacity = no.style.opacity = 0; }
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    onTap(el.querySelector('[data-applied]'), () => decide('applied'));
+  }
+
+  function send(id, decision) {
+    // Each request waits for the previous one, whatever its outcome.
+    saving = saving.catch(() => {}).then(async () => {
+      const r = await fetch(`/swipe/${id}`, {method: 'POST', credentials: 'same-origin',
+        body: new URLSearchParams({decision})});
+      const data = r.ok ? await r.json() : {ok: false, message: 'Could not save — try again'};
+      if (!data.ok) throw new Error(data.message);
+    });
+    return saving;
+  }
+
+  function fly(el, decision) {
+    const dir = decision === 'no' ? -1 : 1;
+    el.classList.add('gone');
+    el.classList.remove('drag');
+    el.querySelector('.stamp.' + (decision === 'no' ? 'no' : 'yes')).style.opacity = decision === 'applied' ? 0 : 1;
+    el.style.transform = decision === 'applied'
+      ? 'translateY(-120%) scale(.9)'
+      : `translate(${dir * 130}%, 30px) rotate(${dir * 18}deg)`;
+    el.style.opacity = 0;
+    setTimeout(() => el.remove(), 320);
+  }
+
+  function decide(decision) {
+    // No input lock: each decision takes the next card synchronously, so fast
+    // repeated swipes are all honoured, in order.
+    if (!queue.length) return;
+    if (navigator.vibrate) navigator.vibrate(8);  // a tick on Android; iOS ignores it
+    const card = queue.shift();
+    const el = deck.querySelector(`.card[data-id="${card.id}"]:not(.gone)`);
+    if (el) fly(el, decision);
+    history.push({card, decision});
+    if (decision === 'yes') openN.textContent = +openN.textContent + 1;
+    layout();
+    if (queue.length < 5) refill();
+    send(card.id, decision).catch(err => {
+      // Put it back exactly where it was, so nothing is silently lost.
+      const i = history.findIndex(h => h.card.id === card.id);
+      if (i >= 0) history.splice(i, 1);
+      if (decision === 'yes') openN.textContent = Math.max(0, +openN.textContent - 1);
+      queue.unshift(card); layout();
+      toast(err.message || 'Could not save that swipe');
+    });
+  }
+
+  function undo() {
+    if (undoing || !history.length) return;
+    undoing = true;
+    const last = history.pop();
+    send(last.card.id, 'undo').then(() => {
+      if (last.decision === 'yes') openN.textContent = Math.max(0, +openN.textContent - 1);
+      queue.unshift(last.card);
+      layout();
+      const el = deck.querySelector(`.card[data-id="${last.card.id}"]`);
+      if (el) {  // slide back in from where it left
+        el.classList.add('drag');
+        el.style.transform = last.decision === 'no' ? 'translate(-120%,0) rotate(-12deg)' : 'translate(120%,0) rotate(12deg)';
+        requestAnimationFrame(() => requestAnimationFrame(() => { el.classList.remove('drag'); el.style.transform = ''; }));
+      }
+    }).catch(err => { history.push(last); layout(); toast(err.message || 'Undo failed'); })
+      .finally(() => { undoing = false; });
+  }
+
+  async function refill() {
+    if (fetching || exhausted) return;
+    fetching = true;
+    try {
+      const r = await fetch('/swipe/more?exclude=' + [...seen].join(','), {credentials: 'same-origin'});
+      const fresh = ((await r.json()).cards || []).filter(c => !seen.has(c.id));
+      fresh.forEach(c => seen.add(c.id));
+      if (!fresh.length) exhausted = true;
+      queue.push(...fresh);
+      layout();
+    } catch (e) { /* the next swipe tries again */ }
+    fetching = false;
+  }
+
+  // Buttons act on finger-lift for touch rather than waiting for `click`:
+  // a browser can drop the click after a short flick on the card, and a tap
+  // that does nothing is the glitch people notice most. The click that may
+  // follow is then ignored, so nothing fires twice. Mouse and keyboard keep
+  // using `click`.
+  function onTap(btn, fn) {
+    let downId = null, firedAt = 0;
+    btn.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse') downId = e.pointerId; });
+    btn.addEventListener('pointercancel', () => { downId = null; });
+    btn.addEventListener('pointerup', e => {
+      if (e.pointerId !== downId) return;
+      downId = null;
+      const hit = document.elementFromPoint(e.clientX, e.clientY);
+      if (!hit || !btn.contains(hit) || btn.disabled) return;
+      firedAt = Date.now(); fn();
+    });
+    btn.addEventListener('click', e => {
+      if (Date.now() - firedAt < 600) { e.preventDefault(); return; }
+      fn();
+    });
+  }
+  onTap(document.getElementById('b-yes'), () => decide('yes'));
+  onTap(document.getElementById('b-no'), () => decide('no'));
+  onTap(undoBtn, undo);
+  document.addEventListener('keydown', e => {
+    if (e.target.closest('input,textarea,select') || e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === 'arrowright') decide('yes');
+    else if (k === 'arrowleft') decide('no');
+    else if (k === 'a') decide('applied');
+    else if (k === 'z' || k === 'backspace') { e.preventDefault(); undo(); }
+  });
+  layout();
+  if (queue.length < 5) refill();
+})();
+</script>
+{% endblock %}

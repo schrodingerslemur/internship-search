@@ -7,6 +7,8 @@
     python -m app.cli notify-test     verify notification delivery
     python -m app.cli stats           print current database stats
     python -m app.cli apply           prepare today's applications and fill them in
+    python -m app.cli autoapply       cloud worker: submit what was swiped right on
+    python -m app.cli autoapply-profile   upload your applicant profile + resume
 """
 
 from __future__ import annotations
@@ -435,6 +437,49 @@ def _cmd_apply(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_autoapply(args: argparse.Namespace) -> int:
+    """Drain the swipe queue: fill and submit each approved application."""
+    from app.apply.worker import run
+
+    tally = run(max_tasks=args.max, dry_run=args.dry_run)
+    print("done: " + (", ".join(f"{n} {s}" for s, n in sorted(tally.items())) or "queue empty"))
+    return 0
+
+
+def _cmd_autoapply_profile(args: argparse.Namespace) -> int:
+    """Copy data/apply/profile.json and its resume into the database."""
+    from app.apply.cloud import profile_data, readiness, save_record
+    from app.apply.profile import load_profile
+    from app.apply.run import resolve_user
+    from app.db import session_scope
+
+    try:
+        profile = load_profile()
+    except FileNotFoundError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    resume = profile.resume_file()
+    with session_scope() as session:
+        try:
+            user = resolve_user(session, args.email, fallback_email=profile.email)
+        except LookupError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        record = save_record(
+            session,
+            user,
+            data=profile_data(profile),
+            resume=(resume.name, resume.read_bytes()) if resume else None,
+        )
+        problems = readiness(record)
+    print(f"Saved the applicant profile for account {user.email or user.id}.")
+    if resume:
+        print(f"  resume: {resume.name} ({resume.stat().st_size // 1024} KB)")
+    for problem in problems:
+        print(f"  still missing: {problem}")
+    return 0 if not problems else 1
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -502,6 +547,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_apply.add_argument("--email", help="which account to record applications against")
 
+    p_auto = sub.add_parser(
+        "autoapply", help="cloud worker: submit every application swiped right on"
+    )
+    p_auto.add_argument("--max", type=int, default=25, help="most tasks to handle in one run")
+    p_auto.add_argument(
+        "--dry-run", action="store_true",
+        help="fill each form and screenshot it, but do not submit (tasks stay queued)",
+    )
+
+    p_aprof = sub.add_parser(
+        "autoapply-profile",
+        help="upload data/apply/profile.json and its resume for the cloud worker",
+    )
+    p_aprof.add_argument("--email", help="which account the profile belongs to")
+
     p_serve = sub.add_parser("serve", help="run the web dashboard")
     p_serve.add_argument("--host", default=None)
     p_serve.add_argument("--port", type=int, default=None)
@@ -528,6 +588,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_stats(args)
     if args.command == "apply":
         return _cmd_apply(args)
+    if args.command == "autoapply":
+        return _cmd_autoapply(args)
+    if args.command == "autoapply-profile":
+        return _cmd_autoapply_profile(args)
     if args.command == "serve":
         return _cmd_serve(args)
     parser.print_help()

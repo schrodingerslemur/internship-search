@@ -83,6 +83,24 @@ class Settings(BaseSettings):
     usajobs_email: str | None = None
     jooble_api_key: str | None = None
 
+    # ---- Auto-apply (swipe right -> the cloud worker submits) ----
+    #: A fine-grained GitHub token with "Actions: read and write" on this repo.
+    #: With it, a right swipe starts the worker at once; without it the
+    #: worker runs once a day, right after the digest.
+    gh_dispatch_token: str | None = None
+    #: owner/name of the repository holding .github/workflows/autoapply.yml.
+    gh_repo: str = "schrodingerslemur/internship-search"
+    gh_autoapply_workflow: str = "autoapply.yml"
+    #: Hard ceiling on submissions per day, whatever is queued. A runaway guard,
+    #: not a pacing tool: each one was already approved by a swipe.
+    autoapply_daily_limit: int = 30
+    #: Mailbox the applicant's email lands in, for the security code some
+    #: Greenhouse boards send before accepting a submission. Falls back to the
+    #: SMTP account, which for Gmail is the same app password.
+    apply_imap_host: str | None = None
+    apply_imap_user: str | None = None
+    apply_imap_password: str | None = None
+
     # ---- Scheduler ----
     scheduler_enabled: bool = True
     bootstrap_seed_enabled: bool = True

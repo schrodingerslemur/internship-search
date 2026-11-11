@@ -374,6 +374,91 @@ python -m app.cli apply --job URL --check  # fill invisibly, screenshot, never s
 
 ---
 
+## Swipe to apply (cloud)
+
+The **Swipe** tab shows one job at a time: the best undecided matches that have
+a Greenhouse form. Swipe right (→) and an agent in the cloud fills the form and
+submits it; swipe left (←) passes; **Z** undoes. Progress, what was sent, and a
+screenshot of every form are on **Auto-apply status** (account menu).
+
+```
+ dashboard (Render)                 Neon Postgres                 GitHub Actions
+ ──────────────────                 ─────────────                 ──────────────
+ swipe right ──── ApplyTask ──────▶ apply_tasks  ◀── claim ─────  autoapply.yml
+             └─ workflow_dispatch ─────────────────────────────▶  python -m app.cli autoapply
+                                    applicant_records ── profile + resume ──▶ headless Chrome
+                                                     ◀── result + screenshot ──  fills, submits
+```
+
+What the worker does per task, and where it stops:
+
+| Step | Stops with "needs you" when… |
+|---|---|
+| Answer every question: profile → your standing answers → rules → Claude for the rest | a **required** question can't be answered from your profile or resume (never guessed) |
+| Fill the form in headless Chrome | a required answer can't be placed on the page |
+| Click Submit, wait for Greenhouse's confirmation | the form shows errors, a CAPTCHA challenge appears, or no confirmation comes |
+| Greenhouse emails a security code | it has no IMAP access to your inbox, or the email doesn't arrive in 2 min |
+
+Only a confirmed submission is marked **Applied** in the tracker. A closed
+posting is marked failed. Handed-back tasks get **Open the form**, **I applied
+myself** and **Try again** buttons. A daily ceiling (`AUTOAPPLY_DAILY_LIMIT`,
+default 30) guards against a runaway queue.
+
+Free-text answers are written by **Claude on your subscription** via
+`claude -p` (Sonnet), told to use only your resume and facts and to decline
+rather than invent. Groq (`LLM_API_KEY`) is the fallback.
+
+### One-time setup
+
+1. **Deploy**: push to `main`. Render redeploys and runs the migration.
+2. **Upload your applicant profile** to the hosted database, once (and again
+   after editing it). `.env.apply` holds the Neon `DATABASE_URL`, as for the
+   application assistant:
+   ```powershell
+   .\scripts\push-profile.ps1
+   ```
+   Or paste the JSON and upload the PDF on the Auto-apply status page.
+3. **Repository secrets** (Settings → Secrets and variables → Actions):
+   - `CLAUDE_CODE_OAUTH_TOKEN` — run `claude setup-token` and paste the token.
+   - `DATABASE_URL`, `SMTP_*` — already there for the digest. The SMTP login is
+     reused over IMAP to read Greenhouse security codes; set `APPLY_IMAP_HOST`,
+     `APPLY_IMAP_USER`, `APPLY_IMAP_PASSWORD` if your applicant email is a
+     different mailbox (for `@andrew.cmu.edu`, a Google app password on that
+     account).
+4. **Instant start** (optional but recommended): create a fine-grained GitHub
+   token with *Actions: read and write* on this repository only and set it as
+   `GH_DISPATCH_TOKEN` in the Render dashboard. Without it, the worker only
+   runs once a day, right after the digest.
+
+Test without sending anything: *Actions → Auto-apply → Run workflow* with
+**dry run** ticked fills every queued form, stores the screenshot, and leaves
+the tasks queued. Locally: `python -m app.cli autoapply --dry-run`.
+
+### Fast dashboard
+
+Render's free plan sleeps after 15 idle minutes and takes most of a minute to
+wake. `.github/workflows/keepalive.yml` pings `/health` every ten minutes from
+7am to 2am Eastern, so the dashboard opens instantly whenever you are likely to
+use it. It needs the `PUBLIC_BASE_URL` secret. If you would rather pay a few
+dollars a month for a guaranteed instant start, Fly.io with
+`auto_stop_machines = "suspend"` resumes in well under a second.
+
+### Usage budget (all free tiers)
+
+Nothing here polls. Every cost is caused by you opening the dashboard, a swipe,
+or the existing daily digest.
+
+| Service | Limit | What this feature adds |
+|---|---|---|
+| **Neon** compute | scales to zero after 5 idle min | Worker runs only when you swiped (and once right after the digest, while Neon is already awake). The keep-warm ping never touches the database. |
+| **Neon** storage (0.5 GB) | | Profile + resume ≈ 150 KB once. Per application: answers ≈ 3 KB; screenshot ≈ 50 KB (confirmation) to ≈ 250 KB (handed-back form), **deleted after 14 days**. |
+| **Neon** egress (5 GB/mo) | | A deck of 10 cards reads card fields only (no descriptions, no crawler payloads, no resume) — a few KB. The status page never loads screenshots unless you click one. |
+| **Render** (750 instance-h/mo) | | Kept awake 19 h/day ≈ 590 h/mo; sleeps overnight. |
+| **GitHub Actions** | unmetered on public repos | ~2 min per worker run; keep-warm pings take seconds. |
+| **Claude** subscription | your plan's usage window | One Sonnet call per application, only when a form has questions your profile doesn't answer. Hard cap `AUTOAPPLY_DAILY_LIMIT` (30/day). |
+
+---
+
 ## Architecture
 
 ```

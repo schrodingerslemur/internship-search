@@ -1,0 +1,104 @@
+# Auto-apply worker: submits every application swiped right on in the dashboard.
+#
+# Started two ways, and never on a polling schedule (each poll would wake the
+# Neon database just to find an empty queue):
+#   * instantly, by the dashboard on a right swipe (needs GH_DISPATCH_TOKEN set
+#     on the dashboard host -- see README "Swipe to apply")
+#   * right after the daily digest finishes, while Neon is already awake, to
+#     catch anything queued without a dispatch token
+#
+# This repository is public, so these logs are public. The worker prints task
+# ids and outcomes only -- never names, companies or answers -- and stores
+# screenshots in the database rather than as (public) workflow artifacts.
+#
+# Repository secrets (Settings -> Secrets and variables -> Actions):
+#   DATABASE_URL             required; the same Neon string the digest uses
+#   CLAUDE_CODE_OAUTH_TOKEN  recommended; run `claude setup-token` locally and
+#                            paste the result. Writes the "why this company"
+#                            answers on your Claude subscription.
+#   LLM_API_KEY              optional fallback writer (Groq), as for the digest
+#   SMTP_HOST/USER/PASSWORD  optional; reused as IMAP login to read the security
+#                            code some Greenhouse boards email before accepting
+#   APPLY_IMAP_HOST/USER/PASSWORD  optional; overrides the above when your
+#                            applicant email is a different mailbox
+
+name: Auto-apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Fill each form and screenshot it, but do not submit"
+        type: boolean
+        default: false
+  workflow_run:
+    workflows: ["Internship digest"]
+    types: [completed]
+
+# One worker at a time: two would race for the same queue. A dispatch while one
+# runs waits as the single pending run, so a burst of swipes is one more run.
+concurrency:
+  group: autoapply
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TZ: America/New_York
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SCHEDULER_ENABLED: "false"
+      LOG_FORMAT: json
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_BASE_URL: https://api.groq.com/openai/v1
+      LLM_MODEL: openai/gpt-oss-120b
+      LLM_ENABLED: "true"
+      LLM_TIMEOUT_SECONDS: "60"
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      APPLY_IMAP_HOST: ${{ secrets.APPLY_IMAP_HOST }}
+      APPLY_IMAP_USER: ${{ secrets.APPLY_IMAP_USER }}
+      APPLY_IMAP_PASSWORD: ${{ secrets.APPLY_IMAP_PASSWORD }}
+
+    steps:
+      # Seconds, not minutes: answer "is there anything to do?" before
+      # installing anything. Any failure here (no psql, table not migrated yet)
+      # falls through to a full run rather than skipping one.
+      - name: Anything queued?
+        id: queue
+        run: |
+          url="${DATABASE_URL/postgresql+psycopg:/postgresql:}"
+          n=$(psql "$url" -tAc "select count(*) from apply_tasks where status in ('queued','running')" 2>/dev/null || echo "unknown")
+          echo "open tasks: $n"
+          if [ "$n" = "0" ]; then echo "run=false" >> "$GITHUB_OUTPUT"; else echo "run=true" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: actions/checkout@v4
+        if: steps.queue.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.queue.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        if: steps.queue.outputs.run == 'true'
+        # Playwright drives the runner's preinstalled Google Chrome, so no
+        # browser download is needed.
+        run: pip install -e ".[postgres,apply]"
+
+      - name: Install Claude Code
+        if: steps.queue.outputs.run == 'true' && env.CLAUDE_CODE_OAUTH_TOKEN != ''
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Migrate
+        if: steps.queue.outputs.run == 'true'
+        run: python -m alembic upgrade head
+
+      - name: Apply
+        if: steps.queue.outputs.run == 'true'
+        run: python -m app.cli autoapply ${{ inputs.dry_run && '--dry-run' || '' }}

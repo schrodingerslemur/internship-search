@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import PROJECT_ROOT, ensure_dirs, get_settings
 from app.logging_setup import configure_logging, get_logger
-from app.web.routes import accounts, api, pages, quick_actions
+from app.web.routes import accounts, api, autoapply, pages, quick_actions
 
 log = get_logger("main")
 
@@ -145,6 +145,7 @@ def create_app() -> FastAPI:
     app.include_router(api.router, prefix="/api")
     app.include_router(accounts.router)
     app.include_router(quick_actions.router)
+    app.include_router(autoapply.router)
     app.include_router(pages.router)
 
     @app.exception_handler(Exception)

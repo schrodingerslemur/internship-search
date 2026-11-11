@@ -1,0 +1,33 @@
+# Keep the Render dashboard warm so it opens instantly instead of in ~50s.
+#
+# Render's free plan stops a web service after 15 minutes without traffic and
+# takes most of a minute to start it again. A request every ten minutes keeps
+# it running -- but only 7am to 2am Eastern (19 hours a day, ~590 hours a
+# month), which leaves a margin under the free plan's 750 instance-hours for
+# anything else on the account. Overnight it sleeps as before. /health answers
+# without touching the database, so this never wakes Neon. Free on a public
+# repository: Actions minutes are not metered there.
+#
+# Needs the PUBLIC_BASE_URL secret (https://<your-app>.onrender.com), which the
+# digest workflow already uses. GitHub's scheduler can run a few minutes late
+# under load, so an occasional cold start can still slip through.
+
+name: Keep dashboard warm
+
+on:
+  schedule:
+    # UTC. 11:00-05:59 UTC is 7am-2am EDT (6am-1am EST).
+    - cron: "*/10 0-5,11-23 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping
+        env:
+          URL: ${{ secrets.PUBLIC_BASE_URL }}
+        run: |
+          if [ -z "$URL" ]; then echo "PUBLIC_BASE_URL is not set; nothing to ping"; exit 0; fi
+          curl -fsS --max-time 120 --retry 2 -o /dev/null -w "%{http_code} in %{time_total}s\n" "${URL%/}/health"
