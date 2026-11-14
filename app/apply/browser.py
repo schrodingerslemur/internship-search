@@ -144,7 +144,9 @@ def _fill_one(page, answer: Answer) -> bool:
     if answer.name == "location":
         return _choose_location(page, str(value))
     if answer.type == "file":
-        target = page.locator(f'input[type="file"][id="{answer.name}"]').first
+        target = page.locator(
+            f'input[type="file"][id="{answer.name}"], input[type="file"][name="{answer.name}"]'
+        ).first
         if target.count() == 0 or not Path(str(value)).exists():
             return False
         target.set_input_files(str(value))

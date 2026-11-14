@@ -193,6 +193,29 @@ class TestAnswers:
         a = by_name(prepare_answers(parse_questions(PAYLOAD), applicant))
         assert not a["cover_letter"].answered
 
+    def test_uploaded_documents_answer_the_uploads_that_ask_for_them(self, applicant, tmp_path):
+        payload = {"questions": [
+            q("question_10", "Unofficial Transcript", "input_file", required=True),
+            q("cover_letter", "Cover Letter", "input_file", required=False),
+            q("question_11", "Please attach your most recent grades", "input_file", required=False),
+            q("question_12", "Additional attachment", "input_file", required=True),
+        ]}
+        applicant.documents = {
+            "transcript": {"path": str(tmp_path / "t.pdf"), "labels": []},
+            "cover_letter": {"path": str(tmp_path / "c.pdf"), "labels": []},
+        }
+        a = by_name(prepare_answers(parse_questions(payload), applicant))
+        assert a["question_10"].value == str(tmp_path / "t.pdf")
+        assert a["question_11"].value == str(tmp_path / "t.pdf")
+        # A generic cover letter goes only where one is required.
+        assert not a["cover_letter"].answered
+        assert not a["question_12"].answered
+
+        # A file uploaded for an exact question answers that question from then on.
+        applicant.documents["other"] = {"path": str(tmp_path / "o.pdf"), "labels": ["Additional attachment"]}
+        a = by_name(prepare_answers(parse_questions(payload), applicant))
+        assert a["question_12"].value == str(tmp_path / "o.pdf")
+
 
 class FakeModel:
     def __init__(self, replies):

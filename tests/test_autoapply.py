@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from contextlib import contextmanager
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -111,6 +112,24 @@ class TestDeck:
         never_seen_new = make_job(session, 3, date_posted=now - timedelta(days=10), relevance_score=80)
         make_job(session, 4, date_posted=now - timedelta(days=400))
         assert [c["id"] for c in cloud.deck(session, account)] == [evergreen.id, never_seen_new.id]
+
+    def test_load_more_adds_boards_the_agent_cannot_fill(self, session, account):
+        now = utcnow()
+        gh = make_job(session, 1, score=80)
+        sr = make_job(
+            session, 2, score=95, greenhouse=False,
+            application_url="https://jobs.smartrecruiters.com/WesternDigital/1",
+        )
+        stale = make_job(session, 3, score=70, date_posted=now - timedelta(days=30),
+                         last_seen_at=now - timedelta(days=20))
+        make_job(session, 4, greenhouse=False, priority=Priority.SKIP.value)
+        make_job(session, 5, greenhouse=False, date_posted=now - timedelta(days=400))
+
+        assert [c["id"] for c in cloud.deck(session, account)] == [gh.id]
+        cards = cloud.deck(session, account, wider=True, exclude={gh.id})
+        assert [c["id"] for c in cards] == [sr.id, stale.id]
+        assert cards[0]["agent"] is False and cards[0]["board"] == "SmartRecruiters"
+        assert cards[1]["agent"] is True
 
     def test_a_card_carries_only_what_it_shows(self, session, account):
         make_job(session, 1, description="x" * 5000, salary_min=None)
@@ -251,6 +270,29 @@ class TestWorker:
         state = user_jobs.get_state(session, account, session.get(Job, job.id))
         assert state.status == JobStatus.APPLIED.value
 
+    def test_documents_reach_the_form_and_a_missing_one_asks_for_an_upload(
+        self, session, account, worker_db, monkeypatch
+    ):
+        task, _ = self._queue(session, account)
+        cloud.save_document(session, account, "transcript", "grades.pdf", b"%PDF-t")
+        session.commit()
+        seen = {}
+
+        def fake_draft(form, profile, **k):
+            seen["docs"] = {kind: Path(d["path"]).read_bytes() for kind, d in profile.documents.items()}
+            return _draft([Answer(name="question_9", label="Upload a writing sample", type="file", required=True)])
+
+        monkeypatch.setattr(worker, "draft_for", fake_draft)
+        monkeypatch.setattr(worker, "_fill_and_submit", lambda *a, **k: pytest.fail("must not open a browser"))
+        worker.run(say=lambda _: None)
+        session.expire_all()
+        assert seen["docs"] == {"transcript": b"%PDF-t"}
+        done = session.get(ApplyTask, task.id)
+        assert done.status == NEEDS_YOU
+        assert done.left_for_you == [
+            {"label": "Upload a writing sample", "type": "file", "options": [], "kind": "writing_sample"}
+        ]
+
     def test_a_closed_posting_fails_without_retrying(self, session, account, worker_db, monkeypatch):
         import httpx
 
@@ -347,6 +389,71 @@ class TestPages:
         session.query(ApplyTask).filter_by(job_id=job.id).one().status = RUNNING
         session.flush()
         assert signed_in.post(f"/swipe/{job.id}", data={"decision": "undo"}).json()["ok"] is False
+
+    def test_save_keeps_a_job_the_agent_cannot_fill_and_undo_restores(self, signed_in, session, account):
+        job = make_job(session, 1, greenhouse=False)
+        assert signed_in.post(f"/swipe/{job.id}", data={"decision": "save"}).json()["ok"]
+        assert user_jobs.get_state(session, account, job).status == JobStatus.SAVED.value
+        assert session.query(ApplyTask).count() == 0
+        more = signed_in.get("/swipe/more", params={"wider": "1"}).json()
+        assert more["cards"] == []
+
+        assert signed_in.post(f"/swipe/{job.id}", data={"decision": "undo"}).json()["ok"]
+        assert user_jobs.get_state(session, account, job).status == JobStatus.NEW.value
+
+    def test_review_tab_offers_apply_for_me_only_where_the_agent_can(self, signed_in, session, account):
+        gh = make_job(session, 1, company="Greenco")
+        make_job(session, 2, company="Otherco", greenhouse=False)
+        page = signed_in.get("/").text
+        assert f'action="/job/{gh.id}/autoapply"' in page
+        assert page.count("Apply for me") == 1
+
+        r = signed_in.post(f"/job/{gh.id}/autoapply", data={"view": "review"}, headers={"HX-Request": "true"})
+        assert r.status_code == 200 and "The agent is applying" in r.text
+        task = session.query(ApplyTask).filter_by(job_id=gh.id).one()
+        assert task.status == QUEUED
+        assert user_jobs.get_state(session, account, gh).status == JobStatus.SAVED.value
+
+        # Undo from the toast (back to review) withdraws the queued application.
+        signed_in.post(f"/job/{gh.id}/status", data={"status": "new", "view": "saved"})
+        session.refresh(task)
+        assert task.status == "cancelled"
+
+    def test_apply_for_me_refuses_a_form_the_agent_cannot_fill(self, signed_in, session):
+        job = make_job(session, 1, greenhouse=False)
+        assert signed_in.post(f"/job/{job.id}/autoapply").status_code == 400
+
+    def test_a_needed_file_is_uploaded_from_the_card_and_the_task_retried(self, signed_in, session, account):
+        cloud.save_record(session, account, data=PROFILE, resume=("cv.pdf", b"%PDF"))
+        task = cloud.enqueue(session, account, make_job(session, 1))
+        task.status = NEEDS_YOU
+        task.left_for_you = [{"label": "Unofficial Transcript", "type": "file", "options": [], "kind": "transcript"}]
+        session.flush()
+
+        page = signed_in.get("/autoapply").text
+        assert "Upload and apply" in page and 'value="transcript" selected' in page
+
+        r = signed_in.post(
+            f"/autoapply/task/{task.id}/document",
+            data={"kind_1": "transcript", "label_1": "Unofficial Transcript"},
+            files={"file_1": ("transcript.pdf", b"%PDF-t", "application/pdf")},
+        )
+        assert r.status_code == 303 and "bad" not in r.headers["location"]
+        session.refresh(task)
+        assert task.status == QUEUED
+        [doc] = cloud.documents_for(session, account.id)
+        assert (doc.kind, doc.filename, doc.labels) == ("transcript", "transcript.pdf", ["Unofficial Transcript"])
+
+    def test_documents_are_managed_from_the_profile(self, signed_in, session, account):
+        r = signed_in.post("/autoapply/documents", data={"kind": "cover_letter"},
+                           files={"document": ("cl.pdf", b"%PDF", "application/pdf")})
+        assert "bad" not in r.headers["location"]
+        assert "cl.pdf" in signed_in.get("/autoapply").text
+        bad = signed_in.post("/autoapply/documents", data={"kind": "nonsense"},
+                             files={"document": ("x.pdf", b"%PDF", "application/pdf")})
+        assert "bad=1" in bad.headers["location"]
+        signed_in.post("/autoapply/documents/cover_letter/delete")
+        assert cloud.documents_for(session, account.id) == []
 
     def test_already_applied_records_it_without_queueing(self, signed_in, session, account):
         job = make_job(session, 1)

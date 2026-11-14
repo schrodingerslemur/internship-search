@@ -58,6 +58,8 @@
 .keys{text-align:center;font-size:12px;color:var(--dim);margin-top:14px}
 .done{position:absolute;inset:0;display:grid;place-content:center;text-align:center;color:var(--muted)}
 .done h2{color:var(--text);margin:0 0 6px}
+.done .btn{margin-top:6px}
+.card .facts span.self{color:var(--text);background:color-mix(in srgb,var(--warn) 18%,var(--panel-2));font-weight:600}
 @media (max-width:640px){
   /* The shared layout pads the bottom for the bulk-action bar, which this page
      does not have; without this the page scrolls under a sideways swipe. */
@@ -126,6 +128,10 @@
   const history = [];
   let saving = Promise.resolve();   // decisions are sent in order, off the UI path
   let fetching = false, exhausted = false, undoing = false;
+  // After the agent's deck runs dry, "Load more" widens it to every undecided
+  // match, including boards the agent cannot fill (those save, not apply).
+  let wider = false;
+  const rightOf = c => c.agent === false ? 'save' : 'yes';
   const toast = (t) => window.showToast && window.showToast(t, true);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -133,10 +139,11 @@
     const el = document.createElement('article');
     el.className = 'card';
     el.dataset.id = c.id;
-    const facts = c.facts.map(f => `<span>${esc(f)}</span>`).join('') +
+    const facts = (c.agent === false ? `<span class="self" title="The agent only fills Greenhouse forms">You apply · ${esc(c.board)}</span>` : '') +
+      c.facts.map(f => `<span>${esc(f)}</span>`).join('') +
       (c.applied_before ? `<span class="warn">Applied to ${esc(c.company)} before</span>` : '');
     const points = c.reasons.map(r => `<li>${esc(r)}</li>`).join('') + (c.concern ? `<li class="c">${esc(c.concern)}</li>` : '');
-    el.innerHTML = `<div class="stamp yes">APPLY</div><div class="stamp no">PASS</div>
+    el.innerHTML = `<div class="stamp yes">${c.agent === false ? 'SAVE' : 'APPLY'}</div><div class="stamp no">PASS</div>
       <div class="in">
         <div class="hd"><div><div class="co">${esc(c.company)}</div><div class="ti">${esc(c.title)}</div></div>
           <div class="sc">${c.score}%</div></div>
@@ -162,10 +169,22 @@
       if (depth === 0) arm(el);
     });
     const empty = deck.querySelector('.done');
-    if (!queue.length && !empty) {
-      deck.insertAdjacentHTML('beforeend', `<div class="done"><div style="font-size:34px">🎉</div><h2>All caught up</h2>
-        <p>New matches arrive with each daily search.</p></div>`);
-    } else if (queue.length && empty) empty.remove();
+    const state = !queue.length && (fetching ? 'loading' : wider && exhausted ? 'end' : 'more');
+    if (empty && (queue.length || empty.dataset.state !== state)) empty.remove();
+    if (!queue.length && !deck.querySelector('.done')) {
+      const body = {
+        loading: `<p>Loading…</p>`,
+        more: `<div style="font-size:34px">🎉</div><h2>All caught up</h2>
+          <p>That's every match the agent can apply to.<br>Load more shows the rest &mdash; on other job sites,
+          a right swipe saves it for you to apply to yourself.</p>
+          <button class="btn primary" type="button" id="b-more">Load more</button>`,
+        end: `<div style="font-size:34px">🎉</div><h2>All caught up</h2>
+          <p>New matches arrive with each daily search.</p>`,
+      }[state];
+      deck.insertAdjacentHTML('beforeend', `<div class="done" data-state="${state}">${body}</div>`);
+      const more = document.getElementById('b-more');
+      if (more) onTap(more, () => { wider = true; exhausted = false; refill(); });
+    }
     undoBtn.disabled = !history.length;
   }
 
@@ -195,7 +214,7 @@
     const end = () => {
       if (x0 === null) return;
       x0 = null; cancelAnimationFrame(raf); el.classList.remove('drag');
-      if (Math.abs(dx) > 90) decide(dx > 0 ? 'yes' : 'no');
+      if (Math.abs(dx) > 90) decide(dx > 0 ? rightOf(queue[0]) : 'no');
       else { el.style.transform = ''; yes.style.opacity = no.style.opacity = 0; }
     };
     el.addEventListener('pointerup', end);
@@ -236,6 +255,7 @@
     if (el) fly(el, decision);
     history.push({card, decision});
     if (decision === 'yes') openN.textContent = +openN.textContent + 1;
+    if (decision === 'save') toast(`Saved — apply on ${card.board} from the Saved tab`);
     layout();
     if (queue.length < 5) refill();
     send(card.id, decision).catch(err => {
@@ -269,15 +289,18 @@
   async function refill() {
     if (fetching || exhausted) return;
     fetching = true;
+    layout();
     try {
-      const r = await fetch('/swipe/more?exclude=' + [...seen].join(','), {credentials: 'same-origin'});
+      const qs = new URLSearchParams({exclude: [...seen].join(',')});
+      if (wider) qs.set('wider', '1');
+      const r = await fetch('/swipe/more?' + qs, {credentials: 'same-origin'});
       const fresh = ((await r.json()).cards || []).filter(c => !seen.has(c.id));
       fresh.forEach(c => seen.add(c.id));
       if (!fresh.length) exhausted = true;
       queue.push(...fresh);
-      layout();
     } catch (e) { /* the next swipe tries again */ }
     fetching = false;
+    layout();
   }
 
   // Buttons act on finger-lift for touch rather than waiting for `click`:
@@ -301,13 +324,13 @@
       fn();
     });
   }
-  onTap(document.getElementById('b-yes'), () => decide('yes'));
+  onTap(document.getElementById('b-yes'), () => queue.length && decide(rightOf(queue[0])));
   onTap(document.getElementById('b-no'), () => decide('no'));
   onTap(undoBtn, undo);
   document.addEventListener('keydown', e => {
     if (e.target.closest('input,textarea,select') || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
-    if (k === 'arrowright') decide('yes');
+    if (k === 'arrowright') { if (queue.length) decide(rightOf(queue[0])); }
     else if (k === 'arrowleft') decide('no');
     else if (k === 'a') decide('applied');
     else if (k === 'z' || k === 'backspace') { e.preventDefault(); undo(); }

@@ -26,7 +26,7 @@ from pathlib import Path
 import httpx
 
 from app.apply import greenhouse
-from app.apply.answers import Draft
+from app.apply.answers import Draft, document_kind
 from app.apply.cloud import (
     claim_next,
     profile_from_record,
@@ -39,7 +39,7 @@ from app.apply.run import draft_for
 from app.config import get_settings
 from app.db import session_scope
 from app.logging_setup import get_logger
-from app.models import ApplicantRecord, ApplyTask, Job, User
+from app.models import ApplicantDocument, ApplicantRecord, ApplyTask, Job, User
 from app.models.autoapply import FAILED, NEEDS_YOU, QUEUED, RUNNING, SUBMITTED, WAITING_CODE
 from app.models.base import JobStatus, utcnow
 
@@ -118,12 +118,22 @@ def _process(task_id: int, answerer, *, dry_run: bool) -> Outcome:
         resume_name = Path(record.resume_filename or "resume.pdf").name
         resume_bytes = record.resume_bytes
         profile = profile_from_record(record)
+        documents = [
+            (d.kind, Path(d.filename).name, d.content, list(d.labels or []))
+            for d in session.query(ApplicantDocument).filter_by(user_id=task.user_id)
+        ]
 
     with tempfile.TemporaryDirectory() as tmp:
         # The original filename is what the recruiter sees attached.
         resume = Path(tmp) / resume_name
         resume.write_bytes(resume_bytes)
         profile.resume_path = str(resume)
+        for kind, filename, content, labels in documents:
+            # A folder each, so two documents with the same filename both survive.
+            path = Path(tmp) / kind / filename
+            path.parent.mkdir()
+            path.write_bytes(content)
+            profile.documents[kind] = {"path": str(path), "labels": labels}
         try:
             draft = draft_for(
                 form, profile, llm=answerer, company=company, title=title,
@@ -139,7 +149,8 @@ def _process(task_id: int, answerer, *, dry_run: bool) -> Outcome:
             labels = [a.label for a in draft.unresolved]
             # Enough of each question for the status page to ask it there.
             _store_left(task_id, [
-                {"label": a.label, "type": a.type, "options": a.options[:100]}
+                {"label": a.label, "type": a.type, "options": a.options[:100],
+                 **({"kind": document_kind(a.label, a.name) or "other"} if a.type == "file" else {})}
                 for a in draft.unresolved
             ])
             return Outcome(

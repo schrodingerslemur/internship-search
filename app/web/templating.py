@@ -201,3 +201,19 @@ templates.env.globals["dismiss_reasons"] = DISMISS_REASONS
 from app.services.jobs_query import group_jobs  # noqa: E402 - same reason as above
 
 templates.env.globals["group_jobs"] = group_jobs
+
+
+def agent_can_apply(job) -> bool:
+    """Whether the auto-apply agent can fill this job's form (Greenhouse only).
+
+    Reads only URLs already on the row and its eagerly loaded listings.
+    """
+    from app.apply.picker import greenhouse_form
+
+    try:
+        return greenhouse_form(job) is not None
+    except Exception:  # a detached or partial row: just hide the button
+        return False
+
+
+templates.env.globals["agent_can_apply"] = agent_can_apply

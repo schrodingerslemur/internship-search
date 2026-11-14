@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy.orm import Session
 
 from app.apply import cloud
+from app.apply.answers import DOCUMENT_KINDS
 from app.db import get_db
 from app.models import ApplyTask, User
 from app.models.base import JobStatus
@@ -68,10 +69,13 @@ def swipe_page(request: Request, db: Session = Depends(get_db), user: User = Dep
 
 @router.get("/swipe/more")
 def swipe_more(
-    exclude: str = "", db: Session = Depends(get_db), user: User = Depends(current_user)
+    exclude: str = "",
+    wider: bool = False,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ) -> JSONResponse:
     skip = {int(x) for x in exclude.split(",")[:500] if x.strip().isdigit()}
-    return JSONResponse({"cards": cloud.deck(db, user, limit=10, exclude=skip)})
+    return JSONResponse({"cards": cloud.deck(db, user, limit=10, exclude=skip, wider=wider)})
 
 
 @router.post("/swipe/{job_id}")
@@ -92,6 +96,10 @@ def swipe_decide(
             return JSONResponse({"ok": False, "message": "No form the agent can fill for this one"})
         db.commit()
         background.add_task(_wake_worker)
+    elif decision == "save":
+        # A board the agent cannot fill: keep it on Saved for you to apply to.
+        user_jobs.set_status(db, user, job, JobStatus.SAVED.value)
+        db.commit()
     elif decision == "no":
         user_jobs.set_status(db, user, job, JobStatus.DISMISSED.value)
         db.commit()
@@ -110,7 +118,7 @@ def swipe_decide(
             set_status(db, job, JobStatus.NEW, user)
         db.commit()
     else:
-        raise HTTPException(400, "decision must be yes, no, applied or undo")
+        raise HTTPException(400, "decision must be yes, save, no, applied or undo")
     return JSONResponse({"ok": True})
 
 
@@ -133,6 +141,8 @@ def autoapply_page(request: Request, db: Session = Depends(get_db), user: User =
                 k: counts.get(k, 0) for k in (cloud.QUEUED, cloud.RUNNING, cloud.WAITING_CODE)
             },
             "flash": {"text": flash, "bad": request.query_params.get("bad") == "1"} if flash else None,
+            "documents": cloud.documents_for(db, user.id),
+            "document_kinds": {k: name for k, (name, _) in DOCUMENT_KINDS.items()},
         },
     )
 
@@ -158,6 +168,83 @@ async def autoapply_profile(
     cloud.save_record(db, user, data=data, resume=upload)
     db.commit()
     return RedirectResponse(f"/autoapply?done={quote('Profile saved')}", 303)
+
+
+async def _read_upload(upload: UploadFile | None) -> tuple[str, bytes] | str:
+    """(filename, bytes), or the reason the upload was refused."""
+    if upload is None or not upload.filename:
+        return "Choose a file first"
+    content = await upload.read(MAX_RESUME_BYTES + 1)
+    if len(content) > MAX_RESUME_BYTES:
+        return "That file is over 5 MB"
+    if not content:
+        return "That file is empty"
+    return upload.filename, content
+
+
+@router.post("/autoapply/documents")
+async def autoapply_document(
+    kind: str = Form(...),
+    document: UploadFile | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """A transcript, cover letter, ...: attached wherever a form asks for one."""
+    got = await _read_upload(document)
+    if isinstance(got, str):
+        return RedirectResponse(f"/autoapply?bad=1&done={quote(got)}#profile", 303)
+    try:
+        cloud.save_document(db, user, kind, *got)
+    except ValueError as exc:
+        return RedirectResponse(f"/autoapply?bad=1&done={quote(str(exc))}#profile", 303)
+    db.commit()
+    return RedirectResponse(f"/autoapply?done={quote(DOCUMENT_KINDS[kind][0] + ' saved')}#profile", 303)
+
+
+@router.post("/autoapply/documents/{kind}/delete")
+def autoapply_document_delete(kind: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    cloud.delete_document(db, user, kind)
+    db.commit()
+    return RedirectResponse(f"/autoapply?done={quote('Removed')}#profile", 303)
+
+
+@router.post("/autoapply/task/{task_id}/document")
+async def autoapply_task_document(
+    task_id: int,
+    request: Request,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """The files a form wanted (a transcript, say): keep them for every form, and retry.
+
+    Fields come in numbered sets -- ``file_N``, ``kind_N``, ``label_N`` -- one
+    per upload the form asked for, so all of them go in with a single retry.
+    """
+    task = _own_task(db, user, task_id)
+    form = await request.form()
+    saved = 0
+    for key, upload in form.multi_items():
+        if not key.startswith("file_") or isinstance(upload, str):
+            continue
+        n = key[len("file_"):]
+        if not upload.filename:
+            continue
+        got = await _read_upload(upload)
+        if isinstance(got, str):
+            return RedirectResponse(f"/autoapply?bad=1&done={quote(got)}", 303)
+        try:
+            cloud.save_document(db, user, str(form.get("kind_" + n) or "other"), *got,
+                                label=str(form.get("label_" + n) or ""))
+        except ValueError as exc:
+            return RedirectResponse(f"/autoapply?bad=1&done={quote(str(exc))}", 303)
+        saved += 1
+    if not saved:
+        return RedirectResponse(f"/autoapply?bad=1&done={quote('Choose a file first')}", 303)
+    cloud.enqueue(db, user, cloud.lean_job(db, task.job_id))
+    db.commit()
+    background.add_task(_wake_worker)
+    return RedirectResponse(f"/autoapply?done={quote('Saved. Applying again')}", 303)
 
 
 @router.post("/autoapply/task/{task_id}/retry")

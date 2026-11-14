@@ -35,6 +35,41 @@ DEMOGRAPHIC = re.compile(
     r"transgender|lgbt|pronoun",
     re.IGNORECASE,
 )
+#: Uploads beyond the resume, by kind, with the wording a form's upload uses.
+DOCUMENT_KINDS: dict[str, tuple[str, re.Pattern]] = {
+    "transcript": ("Transcript", re.compile(r"transcript|grade report|academic record|\bgrades\b", re.I)),
+    "cover_letter": ("Cover letter", re.compile(r"cover ?letter|motivation(?:al)? letter|letter of interest", re.I)),
+    "portfolio": ("Portfolio", re.compile(r"portfolio|work samples?|project samples?", re.I)),
+    "writing_sample": ("Writing sample", re.compile(r"writing sample", re.I)),
+    "other": ("Other document", re.compile(r"(?!)")),  # matched only by the labels it was uploaded for
+}
+#: Uploaded, but attached only where a form insists: a generic cover letter
+#: sent where none was asked for reads worse than none.
+ONLY_WHEN_REQUIRED = frozenset({"cover_letter", "other"})
+
+
+def document_kind(label: str, name: str = "") -> str | None:
+    """Which kind of document an upload question asks for, if it says."""
+    if name == "cover_letter":
+        return "cover_letter"
+    return next((k for k, (_, rx) in DOCUMENT_KINDS.items() if rx.search(label or "")), None)
+
+
+def document_for(q, profile: ApplicantProfile) -> str | None:
+    """The path of the applicant's document answering an upload question."""
+    docs = profile.documents or {}
+    exact = norm(q.label)
+    for kind, entry in docs.items():
+        if exact in {norm(lab) for lab in entry.get("labels", [])}:
+            return entry.get("path")
+    kind = document_kind(q.label, q.name)
+    if kind is None or kind not in docs:
+        return None
+    if kind in ONLY_WHEN_REQUIRED and not q.required:
+        return None
+    return docs[kind].get("path")
+
+
 MONTHS = (
     "january february march april may june july august september october november december"
 ).split()
@@ -326,8 +361,12 @@ def prepare_answers(
             path = profile.resume_file()
             a.value, a.source = (str(path) if path else None), "profile"
             continue
-        if q.name == "cover_letter":
-            continue  # optional almost everywhere; never invented
+        if q.type == "file":
+            # Transcript, cover letter, ...: only what the applicant uploaded.
+            path = document_for(q, profile)
+            if path:
+                a.value, a.source = path, "profile"
+            continue
 
         standing = next((s for s in profile.standing_answers if s.applies_to(q.label)), None)
         if standing is not None:

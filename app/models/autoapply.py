@@ -96,3 +96,25 @@ class ApplicantRecord(Base, TimestampMixin):
     data: Mapped[dict] = mapped_column(JSON, default=dict)
     resume_filename: Mapped[str | None] = mapped_column(String(300))
     resume_bytes: Mapped[bytes | None] = mapped_column(LargeBinary)
+
+
+class ApplicantDocument(Base, TimestampMixin):
+    """A file beyond the resume that some forms require: a transcript, a
+    cover letter. One per kind; the worker attaches it wherever a form's
+    upload asks for that kind, or for one of the exact questions in ``labels``.
+    """
+
+    __tablename__ = "applicant_documents"
+    __table_args__ = (UniqueConstraint("user_id", "kind", name="uq_applicant_document_kind"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    #: One of app.apply.answers.DOCUMENT_KINDS.
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    filename: Mapped[str] = mapped_column(String(300), nullable=False)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    #: Question labels this file was uploaded to answer, matched exactly, for
+    #: uploads whose wording names no kind ("Additional attachment").
+    labels: Mapped[list] = mapped_column(JSON, default=list)

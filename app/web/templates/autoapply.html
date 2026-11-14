@@ -1,31 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Auto-apply · Internship Search<script>
-// While the agent is working, refresh when its state changes (a code request
-// appears, an application finishes) -- but never under someone typing.
-(() => {
-  const start = {{ pending | tojson }};
-  let last = JSON.stringify(start);
-  if (!(start.queued + start.running + start.waiting_code)) return;
-  const typing = () => {
-    const a = document.activeElement;
-    if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) return true;
-    return [...document.querySelectorAll('.ask input, .ask textarea, .ask select, textarea')]
-      .some(e => e.value && e.defaultValue !== e.value);
-  };
-  const timer = setInterval(async () => {
-    if (document.hidden) return;
-    try {
-      const r = await fetch('/autoapply/pending', {headers: {Accept: 'application/json'}});
-      if (!r.ok) return;
-      const now = await r.json(), key = JSON.stringify(now);
-      if (key !== last && !typing()) location.reload();
-      if (!(now.queued + now.running + now.waiting_code)) clearInterval(timer);
-      last = key;
-    } catch (e) {}
-  }, 6000);
-})();
-</script>
-{% endblock %}
+{% block title %}Auto-apply · Internship Search{% endblock %}
 {% block content %}
 <style>
 .aa{max-width:760px;margin:0 auto}
@@ -116,7 +90,23 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
       <span class="hint">Remembered for every future form that asks the same.</span>
     </form>
     {% endif %}
-    {% if files %}<ul>{% for q in files %}<li>{{ q.label }} <span class="hint">(a file: upload it on the form)</span></li>{% endfor %}</ul>{% endif %}
+    {% if files %}
+    <form class="ask" method="post" action="/autoapply/task/{{ t.id }}/document" enctype="multipart/form-data">
+      {% for q in files %}
+      {% set have = documents|selectattr('kind', 'equalto', q.kind or 'other')|first %}
+      <label>{{ q.label }}
+        <input type="hidden" name="label_{{ loop.index }}" value="{{ q.label }}">
+        <select name="kind_{{ loop.index }}" aria-label="What this file is">
+          {% for k, name in document_kinds.items() %}<option value="{{ k }}" {% if k == (q.kind or 'other') %}selected{% endif %}>{{ name }}</option>{% endfor %}
+        </select>
+        <input type="file" name="file_{{ loop.index }}" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
+        {% if have %}<span class="hint">Replaces your saved {{ have.filename }}.</span>{% endif %}
+      </label>
+      {% endfor %}
+      <button class="btn sm primary" type="submit">Upload and apply</button>
+      <span class="hint">Kept with your profile and attached wherever a form asks for it.</span>
+    </form>
+    {% endif %}
     <div class="acts">
       <a class="btn sm primary" href="{{ t.form_url }}" target="_blank" rel="noopener">Open the form</a>
       <form method="post" action="/autoapply/task/{{ t.id }}/done"><button class="btn sm" type="submit">I applied</button></form>
@@ -168,6 +158,25 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
           <input type="file" name="resume" accept=".pdf,.doc,.docx"></label>
         <button class="btn primary" type="submit">Save</button>
       </div>
+    </form>
+
+    <h2 id="documents">Other documents</h2>
+    <p class="sub" style="margin:0 0 8px">Attached when a form asks for one: a transcript wherever it's requested;
+      a cover letter or other file only where it's required.</p>
+    {% for d in documents %}
+    <div class="row">
+      <div class="who"><div class="co">{{ document_kinds.get(d.kind, d.kind) }}</div><div class="ti">{{ d.filename }}</div></div>
+      <span class="when">{{ d.updated_at|timeago }}</span>
+      <form method="post" action="/autoapply/documents/{{ d.kind }}/delete" style="margin:0">
+        <button class="btn sm" type="submit">Remove</button></form>
+    </div>
+    {% endfor %}
+    <form class="bar" method="post" action="/autoapply/documents" enctype="multipart/form-data">
+      <select name="kind" aria-label="What this file is">
+        {% for k, name in document_kinds.items() %}<option value="{{ k }}">{{ name }}</option>{% endfor %}
+      </select>
+      <input type="file" name="document" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" required>
+      <button class="btn" type="submit">Upload</button>
     </form>
   </details>
 </div>

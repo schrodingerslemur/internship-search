@@ -78,6 +78,9 @@ class ApplicantProfile:
     demographics: str = "decline"
 
     resume_path: str = ""
+    #: Uploads beyond the resume, by kind: {"transcript": {"path": ..., "labels": [...]}}.
+    #: Filled in by the worker from the database; never saved in the profile.
+    documents: dict = field(default_factory=dict)
     daily_cap: int = 5
     #: Company names (case-insensitive substrings) never to prepare.
     never_apply_to: list[str] = field(default_factory=list)

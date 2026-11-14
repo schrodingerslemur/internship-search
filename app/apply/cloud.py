@@ -11,6 +11,7 @@ import json
 import re
 from dataclasses import asdict, fields
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import httpx
 from sqlalchemy import and_, func, or_, select
@@ -20,7 +21,7 @@ from app.apply.picker import greenhouse_form
 from app.apply.profile import ApplicantProfile, StandingAnswer
 from app.config import get_settings
 from app.logging_setup import get_logger
-from app.models import ApplicantRecord, ApplyTask, Job, JobListing, User, UserJobState
+from app.models import ApplicantDocument, ApplicantRecord, ApplyTask, Job, JobListing, User, UserJobState
 from app.models.autoapply import (
     CANCELLED,
     FAILED,
@@ -106,9 +107,21 @@ def _has_greenhouse_form():
 
 
 def deck(
-    session: Session, user: User, *, limit: int = 10, exclude: set[int] | None = None
+    session: Session,
+    user: User,
+    *,
+    limit: int = 10,
+    exclude: set[int] | None = None,
+    wider: bool = False,
 ) -> list[dict]:
-    """Undecided jobs the worker can apply to, best first, as card data."""
+    """Undecided jobs the worker can apply to, best first, as card data.
+
+    ``wider`` is the "Load more" pass once that runs dry: every undecided match,
+    including ones on boards the agent cannot fill (SmartRecruiters, Workday,
+    ...) and ones the crawler has not re-sighted lately -- the same jobs the
+    Review tab lists. Each card says whether the agent can apply (``agent``);
+    for the rest a right swipe saves the job for you to apply to yourself.
+    """
     state = UserJobState
     score = func.coalesce(state.relevance_score, Job.relevance_score)
     priority = func.coalesce(state.priority, Job.priority)
@@ -127,17 +140,7 @@ def deck(
             Job.id.not_in(taken),
             Job.id.not_in(sorted(exclude or ())),
             or_(Job.deadline.is_(None), Job.deadline >= now),
-            # Still live: the crawler saw it recently. Posting age alone would hide
-            # evergreen roles that are old but open; a sighting is what proves a
-            # swipe will not just come back as "posting closed".
-            or_(
-                Job.last_seen_at >= now - SEEN_WITHIN,
-                and_(
-                    Job.last_seen_at.is_(None),
-                    or_(Job.date_posted.is_(None), Job.date_posted >= now - MAX_POSTING_AGE),
-                ),
-            ),
-            _has_greenhouse_form(),
+            *_deck_filters(now, wider),
         )
         .options(
             load_only(*_CARD_COLUMNS),
@@ -151,7 +154,7 @@ def deck(
     picked: list[tuple[Job, UserJobState | None]] = []
     for job, st in rows:
         name = (job.company_name or "").lower()
-        if any(b in name for b in blocked) or greenhouse_form(job) is None:
+        if any(b in name for b in blocked) or (not wider and greenhouse_form(job) is None):
             continue
         picked.append((job, st))
         if len(picked) >= limit:
@@ -168,6 +171,36 @@ def deck(
     }
     applied_before = _applied_companies(session, user)
     return [_card(job, st, blurbs.get(job.id), applied_before) for job, st in picked]
+
+
+def _deck_filters(now: datetime, wider: bool) -> tuple:
+    fresh_posting = or_(Job.date_posted.is_(None), Job.date_posted >= now - MAX_POSTING_AGE)
+    if wider:
+        # Seen lately, or posted recently enough to still be plausible.
+        return (or_(Job.last_seen_at >= now - SEEN_WITHIN, fresh_posting),)
+    return (
+        # Still live: the crawler saw it recently. Posting age alone would hide
+        # evergreen roles that are old but open; a sighting is what proves a
+        # swipe will not just come back as "posting closed".
+        or_(
+            Job.last_seen_at >= now - SEEN_WITHIN,
+            and_(Job.last_seen_at.is_(None), fresh_posting),
+        ),
+        _has_greenhouse_form(),
+    )
+
+
+def _board_name(job: Job) -> str:
+    """Where the application form lives, for "you apply on ..." on a card."""
+    url = (job.application_url or job.posting_url or "").lower()
+    for needle, name in (
+        ("smartrecruiters", "SmartRecruiters"), ("myworkdayjobs", "Workday"), ("workday", "Workday"),
+        ("lever.co", "Lever"), ("ashbyhq", "Ashby"), ("icims", "iCIMS"), ("taleo", "Taleo"),
+        ("successfactors", "SuccessFactors"), ("eightfold", "Eightfold"), ("jobvite", "Jobvite"),
+    ):
+        if needle in url:
+            return name
+    return "the company site"
 
 
 def _card(job: Job, st, blurb, applied_before: set[str]) -> dict:
@@ -199,6 +232,8 @@ def _card(job: Job, st, blurb, applied_before: set[str]) -> dict:
         "applied_before": (job.company_name or "").lower() in applied_before,
         "summary": summary,
         "url": job.posting_url or job.application_url or "",
+        "agent": greenhouse_form(job) is not None,
+        "board": _board_name(job),
     }
 
 
@@ -269,7 +304,9 @@ def cancel(session: Session, user: User, job: Job) -> bool:
     task = session.scalar(
         select(ApplyTask).where(ApplyTask.user_id == user.id, ApplyTask.job_id == job.id)
     )
-    if task is None or task.status != QUEUED:
+    if task is None or task.status == CANCELLED:
+        return True  # nothing to withdraw
+    if task.status != QUEUED:
         return False
     task.status = CANCELLED
     task.finished_at = utcnow()
@@ -413,6 +450,7 @@ def get_record(session: Session, user: User) -> ApplicantRecord | None:
 def profile_data(profile: ApplicantProfile) -> dict:
     data = asdict(profile)
     data.pop("resume_path", None)
+    data.pop("documents", None)
     return data
 
 
@@ -467,7 +505,7 @@ def clean_profile_data(raw: dict) -> dict:
     """Keep only fields ApplicantProfile knows; raise on anything malformed."""
     if not isinstance(raw, dict):
         raise ValueError("the profile must be a JSON object")
-    known = {f.name for f in fields(ApplicantProfile)} - {"resume_path"}
+    known = {f.name for f in fields(ApplicantProfile)} - {"resume_path", "documents"}
     data = {k: v for k, v in raw.items() if k in known}
     standing = data.get("standing_answers") or []
     data["standing_answers"] = [asdict(StandingAnswer(**s)) for s in standing]
@@ -475,8 +513,55 @@ def clean_profile_data(raw: dict) -> dict:
     return data
 
 
+def documents_for(session: Session, user_id: int) -> list[ApplicantDocument]:
+    """The user's documents, without their bytes."""
+    return list(session.scalars(
+        select(ApplicantDocument)
+        .options(defer(ApplicantDocument.content))
+        .where(ApplicantDocument.user_id == user_id)
+        .order_by(ApplicantDocument.kind)
+    ))
+
+
+def save_document(
+    session: Session, user: User, kind: str, filename: str, content: bytes, *, label: str | None = None
+) -> ApplicantDocument:
+    """Add or replace the user's document of one kind.
+
+    ``label`` is the exact question it was uploaded to answer; it is kept, so
+    every later form asking that same question gets the same file.
+    """
+    from app.apply.answers import DOCUMENT_KINDS
+
+    if kind not in DOCUMENT_KINDS:
+        raise ValueError(f"unknown document kind {kind!r}")
+    doc = session.scalar(
+        select(ApplicantDocument).where(ApplicantDocument.user_id == user.id, ApplicantDocument.kind == kind)
+    )
+    if doc is None:
+        doc = ApplicantDocument(user_id=user.id, kind=kind, labels=[])
+        session.add(doc)
+    doc.filename, doc.content = Path(filename).name[:300] or "document.pdf", content
+    if label and label.strip() and label.strip() not in (doc.labels or []):
+        doc.labels = [*(doc.labels or []), label.strip()][-20:]
+    session.flush()
+    return doc
+
+
+def delete_document(session: Session, user: User, kind: str) -> bool:
+    doc = session.scalar(
+        select(ApplicantDocument).where(ApplicantDocument.user_id == user.id, ApplicantDocument.kind == kind)
+    )
+    if doc is None:
+        return False
+    session.delete(doc)
+    session.flush()
+    return True
+
+
 def profile_from_record(record: ApplicantRecord, resume_path: str = "") -> ApplicantProfile:
     data = dict(record.data or {})
+    data.pop("documents", None)
     standing = [StandingAnswer(**s) for s in data.pop("standing_answers", []) or []]
     profile = ApplicantProfile(**data)
     profile.standing_answers = standing

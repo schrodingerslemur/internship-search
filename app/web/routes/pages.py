@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -245,10 +245,58 @@ def job_status(
         return HTMLResponse("Invalid status", status_code=400)
 
     previous = user_jobs.status_of(user_jobs.get_state(db, user, job))
+    if previous == JobStatus.SAVED.value and new_status in (JobStatus.NEW, JobStatus.DISMISSED):
+        # Unsaving or dismissing withdraws an "Apply for me" the agent has not
+        # started; once it has, the job is past taking back from here.
+        from app.apply import cloud
+
+        cloud.cancel(db, user, job)
     set_status(db, job, new_status, user, reason=reason or None)
     db.commit()
+    return _decision_response(
+        request, db, user, job, status, previous, OUTCOME.get(status, "Updated"),
+        view=view, surface=surface, redirect_to=redirect_to,
+    )
 
-    message = OUTCOME.get(status, "Updated")
+
+@router.post("/job/{job_id}/autoapply")
+def job_autoapply(
+    job_id: str,
+    request: Request,
+    background: BackgroundTasks,
+    redirect_to: str = Form("/"),
+    view: str = Form("review"),
+    surface: str = Form("feed"),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """"Apply for me" from a job card: the same approval as a right swipe."""
+    from app.apply import cloud
+    from app.web.routes.autoapply import _wake_worker
+
+    job = get_job(db, job_id)
+    if job is None:
+        return HTMLResponse("That job no longer exists.", status_code=404)
+    previous = user_jobs.status_of(user_jobs.get_state(db, user, job))
+    if cloud.enqueue(db, user, job) is None:
+        db.rollback()
+        return HTMLResponse("The agent can only fill Greenhouse forms", status_code=400)
+    db.commit()
+    background.add_task(_wake_worker)
+    return _decision_response(
+        request, db, user, job, JobStatus.SAVED.value, previous,
+        "The agent is applying — follow it under Auto-apply status",
+        view=view, surface=surface, redirect_to=redirect_to,
+    )
+
+
+def _decision_response(
+    request: Request, db: Session, user: User, job, status: str, previous: str, message: str,
+    *, view: str, surface: str, redirect_to: str,
+):
+    """What a card or page shows after a decision: the job's new state, the
+    nav counts, and an undo toast."""
+    new_status = JobStatus(status)
     # Only a dismissal has a reason worth asking for, and only while one is
     # still missing: re-dismissing a job that already carries a reason would
     # ask a question the user has already answered.
