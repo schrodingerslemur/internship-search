@@ -31,6 +31,14 @@ services:
       # the worker runs once a day, right after the digest.
       - key: GH_DISPATCH_TOKEN
         sync: false
+      # Fernet key that seals the API keys users save under "Your model".
+      # Set the same value as the SECRETS_KEY Actions secret.
+      - key: SECRETS_KEY
+        sync: false
+      # The owner's account email: only that account uses the deployment's
+      # own model credentials. Unset: the first account created.
+      - key: OWNER_EMAIL
+        sync: false
       # The GitHub Actions workflow owns the schedule. A second scheduler here
       # would send every digest twice.
       - key: SCHEDULER_ENABLED

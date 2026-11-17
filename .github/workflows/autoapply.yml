@@ -21,6 +21,12 @@
 #                            code some Greenhouse boards email before accepting
 #   APPLY_IMAP_HOST/USER/PASSWORD  optional; overrides the above when your
 #                            applicant email is a different mailbox
+#   SECRETS_KEY              required once other people have accounts; the same
+#                            value as on Render. Opens the API keys users save
+#                            under "Your model", so their tasks run on their
+#                            own model. The two credentials above serve the
+#                            owner's tasks only (OWNER_EMAIL, else account #1).
+#   OWNER_EMAIL              optional; the owner's account email
 
 name: Auto-apply
 
@@ -54,6 +60,8 @@ jobs:
       LOG_FORMAT: json
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      SECRETS_KEY: ${{ secrets.SECRETS_KEY }}
+      OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
       LLM_BASE_URL: https://api.groq.com/openai/v1
       LLM_MODEL: openai/gpt-oss-120b
       LLM_ENABLED: "true"

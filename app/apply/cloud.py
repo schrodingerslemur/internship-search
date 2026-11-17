@@ -432,7 +432,11 @@ def queue_counts(session: Session, user: User) -> dict[str, int]:
 
 
 def claim_next(
-    session: Session, *, now: datetime | None = None, skip: set[int] | None = None
+    session: Session,
+    *,
+    now: datetime | None = None,
+    skip: set[int] | None = None,
+    skip_users: set[int] | None = None,
 ) -> ApplyTask | None:
     """Take the oldest queued task, reclaiming any a dead worker abandoned.
 
@@ -450,7 +454,11 @@ def claim_next(
         stale.detail = "The worker stopped mid-application."
     task = session.scalar(
         select(ApplyTask)
-        .where(ApplyTask.status == QUEUED, ApplyTask.id.not_in(sorted(skip or ())))
+        .where(
+            ApplyTask.status == QUEUED,
+            ApplyTask.id.not_in(sorted(skip or ())),
+            ApplyTask.user_id.not_in(sorted(skip_users or ())),
+        )
         .order_by(ApplyTask.queued_at)
         .limit(1)
     )
@@ -461,10 +469,12 @@ def claim_next(
     return task
 
 
-def submitted_since(session: Session, since: datetime) -> int:
-    return session.scalar(
-        select(func.count()).select_from(ApplyTask).where(ApplyTask.submitted_at >= since)
-    ) or 0
+def submitted_since(session: Session, since: datetime, user_id: int | None = None) -> int:
+    """Submissions since ``since``: everyone's, or one user's."""
+    query = select(func.count()).select_from(ApplyTask).where(ApplyTask.submitted_at >= since)
+    if user_id is not None:
+        query = query.where(ApplyTask.user_id == user_id)
+    return session.scalar(query) or 0
 
 
 def pending_count(session: Session) -> int:

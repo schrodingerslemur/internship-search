@@ -247,3 +247,33 @@ class AppConfig(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     value: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class UserLlmSetting(Base, TimestampMixin):
+    """The model one user brings: their own provider, model and API key.
+
+    Everything the app asks a model on this user's behalf (onboarding, form
+    answers, the general agent) runs on this, never on the deployment's own
+    keys, so one person's use never spends another's quota. The key is stored
+    sealed with ``SECRETS_KEY`` (app/services/secretbox.py), which lives in the
+    host's environment and never in the database.
+    """
+
+    __tablename__ = "user_llm_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    #: A key of app.services.user_llm.PROVIDERS: groq, anthropic, gemini, openai_compatible.
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    #: Only for an OpenAI-compatible endpoint the provider list does not know.
+    base_url: Mapped[str | None] = mapped_column(Text)
+    key_sealed: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The last four characters, to show which key is saved without showing it.
+    key_hint: Mapped[str] = mapped_column(String(12), default="")
+    #: Result of the test call made when the key was saved (None: not tested yet).
+    checked_ok: Mapped[bool | None] = mapped_column(Boolean)
+    check_detail: Mapped[str | None] = mapped_column(String(300))
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime)

@@ -188,11 +188,22 @@ class LlmClient:
     the free ones need no extra install.
     """
 
-    def __init__(self, *, max_calls: int | None = None, timeout: float | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        max_calls: int | None = None,
+        timeout: float | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        """The deployment's own model, or -- given ``base_url``, ``model`` and
+        ``api_key`` -- one a user brought (app/services/user_llm.py)."""
         settings = get_settings()
-        self.enabled = settings.llm_available
-        self.model = settings.llm_model
-        self.base_url = (settings.llm_base_url or "").rstrip("/")
+        own = base_url is not None
+        self.enabled = bool(base_url and model and api_key) if own else settings.llm_available
+        self.model = model if own else settings.llm_model
+        self.base_url = ((base_url if own else settings.llm_base_url) or "").rstrip("/")
         self.max_calls = max_calls if max_calls is not None else settings.llm_max_calls_per_run
         self.timeout = timeout if timeout is not None else settings.llm_timeout_seconds
         self.calls = 0
@@ -200,7 +211,7 @@ class LlmClient:
         #: this run. Every later call short-circuits, because sleeping out a
         #: daily cap one minute at a time burns an hour to achieve nothing.
         self.exhausted = False
-        self._key = settings.llm_key
+        self._key = api_key if own else settings.llm_key
         self._client: httpx.Client | None = None
 
     @property

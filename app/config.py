@@ -100,6 +100,18 @@ class Settings(BaseSettings):
     apply_imap_host: str | None = None
     apply_imap_user: str | None = None
     apply_imap_password: str | None = None
+    #: Submissions per user per day, under the instance-wide ceiling above, so
+    #: one account cannot use up the shared worker for everyone.
+    autoapply_user_daily_limit: int = 10
+
+    # ---- Accounts: who is the owner, and the key that seals users' API keys ----
+    #: The deployment's owner. Only this account runs on the deployment's own
+    #: model credentials (CLAUDE_CODE_OAUTH_TOKEN, LLM_API_KEY) and reads the
+    #: APPLY_IMAP_* inbox; everyone else brings their own model. Unset: the
+    #: first account created.
+    owner_email: str | None = None
+    #: Fernet key that seals the API keys users save (app/services/secretbox.py).
+    secrets_key: str | None = None
 
     # ---- Scheduler ----
     scheduler_enabled: bool = True

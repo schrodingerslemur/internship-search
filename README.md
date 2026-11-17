@@ -417,6 +417,29 @@ under **Sites the agent has learned** on Auto-apply status. It does not create
 accounts; a site that needs a sign-in, or one behind bot protection
 (SmartRecruiters' DataDome), comes back as "needs you".
 
+### Other people's accounts: everyone brings their own model
+
+Anyone can sign up, and nothing they do runs on your quota. Under **Your
+model** (account menu) each person connects their own: a free Groq key (the
+page links straight to where it is made), an Anthropic API key, Gemini, or any
+OpenAI-compatible endpoint. Saving makes one tiny test call and says whether it
+worked. Their form answers and the general agent then run on that key; with no
+key, the form is filled from their profile and anything a model would have
+written comes back to them as a question.
+
+The deployment's own credentials (`CLAUDE_CODE_OAUTH_TOKEN`, `LLM_API_KEY`) and
+the `APPLY_IMAP_*` inbox serve the owner's account only: `OWNER_EMAIL`, or the
+first account created. Each user also has their own daily ceiling
+(`AUTOAPPLY_USER_DAILY_LIMIT`, default 10) under the instance-wide one.
+
+Keys are sealed with `SECRETS_KEY` before they are stored, so the database
+alone never holds one. Make it once and set the same value on Render and as an
+Actions secret:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
 Only a confirmed submission is marked **Applied** in the tracker. A closed
 posting is marked failed. Handed-back tasks get **Open the form**, **I applied
 myself** and **Try again** buttons. A daily ceiling (`AUTOAPPLY_DAILY_LIMIT`,

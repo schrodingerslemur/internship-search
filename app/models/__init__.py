@@ -36,6 +36,7 @@ from app.models.user import (
     Resume,
     User,
     UserJobState,
+    UserLlmSetting,
     UserPreference,
 )
 
@@ -77,6 +78,7 @@ __all__ = [
     "User",
     "AppConfig",
     "UserJobState",
+    "UserLlmSetting",
     "UserPreference",
     "utcnow",
 ]

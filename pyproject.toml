@@ -19,6 +19,8 @@ dependencies = [
     "python-dateutil>=2.9",
     "selectolax>=0.3.21",
     "rapidfuzz>=3.10",
+    "cryptography>=42",
+    "anthropic>=0.122",
 ]
 
 [project.optional-dependencies]

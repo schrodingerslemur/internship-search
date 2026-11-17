@@ -19,6 +19,7 @@ ids and outcomes, never names, companies or answers.
 
 from __future__ import annotations
 
+import contextvars
 import re
 import tempfile
 import time
@@ -65,40 +66,63 @@ class Outcome:
 
 
 def run(*, max_tasks: int = 25, dry_run: bool = False, say=print) -> dict[str, int]:
-    """Process queued tasks until the queue is empty or a limit is reached."""
-    from app.apply.agent_llm import apply_answerer
+    """Process queued tasks until the queue is empty or a limit is reached.
+
+    Each task thinks with its own user's model (app/services/user_llm.py):
+    the deployment's credentials serve the owner's tasks only.
+    """
+    from app.services.user_llm import answerer_for, is_owner
 
     settings = get_settings()
     tally: dict[str, int] = {}
     seen: set[int] = set()
+    capped: set[int] = set()  # users at their own daily limit; their tasks wait
     with session_scope() as session:
         prune_screenshots(session)
-    answerer = apply_answerer()
-    say(f"answer writers: {', '.join(answerer.names) or 'none (rules and standing answers only)'}")
-    try:
-        for _ in range(max_tasks):
-            with session_scope() as session:
-                day_start = utcnow() - timedelta(hours=24)
-                if not dry_run and submitted_since(session, day_start) >= settings.autoapply_daily_limit:
-                    say(f"daily limit of {settings.autoapply_daily_limit} reached; the rest wait")
-                    break
-                task = claim_next(session, skip=seen)
-                if task is None:
-                    break
-                task_id = task.id
-                seen.add(task_id)
-            say(f"task {task_id}: started")
-            try:
-                outcome = _process(task_id, answerer, dry_run=dry_run)
-            except Exception as exc:  # one broken form must not stop the queue
-                log.exception("autoapply.task_crashed", task_id=task_id)
-                outcome = Outcome(NEEDS_YOU, f"The worker hit an error ({type(exc).__name__}).")
-            _finish(task_id, outcome, dry_run=dry_run)
-            tally[outcome.status] = tally.get(outcome.status, 0) + 1
-            say(f"task {task_id}: {outcome.status}")
-    finally:
-        answerer.close()
+    for _ in range(max_tasks):
+        with session_scope() as session:
+            day_start = utcnow() - timedelta(hours=24)
+            if not dry_run and submitted_since(session, day_start) >= settings.autoapply_daily_limit:
+                say(f"daily limit of {settings.autoapply_daily_limit} reached; the rest wait")
+                break
+            task = claim_next(session, skip=seen, skip_users=capped)
+            if task is None:
+                break
+            task_id, user_id = task.id, task.user_id
+            seen.add(task_id)
+            if (
+                not dry_run
+                and submitted_since(session, day_start, user_id=user_id)
+                >= settings.autoapply_user_daily_limit
+            ):
+                # Back in the queue untouched: tomorrow's run takes it.
+                task.status, task.started_at = QUEUED, None
+                task.attempts = max(0, (task.attempts or 1) - 1)
+                capped.add(user_id)
+                say(f"task {task_id}: its user reached {settings.autoapply_user_daily_limit} today; waits")
+                continue
+            owner = is_owner(session, user_id)
+            answerer = answerer_for(session, user_id)
+        say(f"task {task_id}: started ({', '.join(answerer.names) or 'no model'})")
+        token = _INBOX_ALLOWED.set(owner)
+        try:
+            outcome = _process(task_id, answerer, dry_run=dry_run)
+        except Exception as exc:  # one broken form must not stop the queue
+            log.exception("autoapply.task_crashed", task_id=task_id)
+            outcome = Outcome(NEEDS_YOU, f"The worker hit an error ({type(exc).__name__}).")
+        finally:
+            _INBOX_ALLOWED.reset(token)
+            answerer.close()
+        _finish(task_id, outcome, dry_run=dry_run)
+        tally[outcome.status] = tally.get(outcome.status, 0) + 1
+        say(f"task {task_id}: {outcome.status}")
     return tally
+
+
+#: Whether the task being processed may read the APPLY_IMAP_* inbox for its
+#: security code. That inbox is the owner's: anyone else's code is never in it,
+#: and a code from it would be the owner's, entered on someone else's form.
+_INBOX_ALLOWED: contextvars.ContextVar[bool] = contextvars.ContextVar("inbox_allowed", default=False)
 
 
 # ----------------------------------------------------------------- one task
@@ -186,6 +210,12 @@ def _process_agent(session, task: ApplyTask, job: Job, record, answerer, *, dry_
     if found is None:
         return Outcome(FAILED, "There is no application link for this job.")
     format_key, format_name = found
+    if not answerer.names:
+        return Outcome(
+            NEEDS_YOU,
+            f"Applying on {format_name} needs a model to read the form. Connect one under "
+            "Your model (account menu), then press Try again.",
+        )
     recipe = recipe_for(session, format_key)
     notes = recipe.notes if recipe else ""
     company, title = job.company_name or "", job.title or ""
@@ -362,7 +392,7 @@ def _wait_for_code(task_id: int | None, submitted_at: datetime, *, retry: bool) 
     if task_id is not None:
         _set_waiting(task_id, "That code was not accepted. Enter the newest code the site emailed you."
                      if retry else "The application site emailed you a security code. Enter it here.")
-    has_inbox = credentials() is not None and not retry
+    has_inbox = _INBOX_ALLOWED.get() and credentials() is not None and not retry
     deadline = time.monotonic() + CODE_WAIT_S
     next_inbox = time.monotonic()
     try:

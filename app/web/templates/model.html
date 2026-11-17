@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Your model · Internship Search{% endblock %}
+{% block content %}
+{#
+  Each user brings the model that thinks for them: answers on application
+  forms, the agent on Lever / Workday / company sites. Nothing here ever runs
+  on someone else's key. The key is sealed before it is stored and never
+  rendered back; only its last four characters are.
+#}
+<h1>Your model</h1>
+<div class="sub">The AI that answers application questions and fills forms for you, on your own key.</div>
+
+{% if notice == "works" %}<div class="flash ok">Connected: {{ saved.check_detail }}.</div>{% endif %}
+{% if notice == "failed" and saved %}<div class="flash bad">Saved, but the test call failed: {{ saved.check_detail }}</div>{% endif %}
+{% if notice == "removed" %}<div class="flash ok">Removed. Nothing is stored for you any more.</div>{% endif %}
+{% if error %}<div class="flash bad">{{ error }}</div>{% endif %}
+
+{% if owner %}
+<div class="note">You run this deployment, so your own tasks use its credentials
+(<span class="mono">CLAUDE_CODE_OAUTH_TOKEN</span> / <span class="mono">LLM_API_KEY</span>).
+A model saved here is only used for other people's accounts if they save one themselves; nobody else ever uses yours.</div>
+{% endif %}
+
+{% if not can_store %}
+<div class="note bad">This server cannot store keys yet: its <span class="mono">SECRETS_KEY</span> is not set.</div>
+{% endif %}
+
+{% if saved %}
+<div class="panel" style="margin-bottom:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between">
+  <div>
+    <div style="font-weight:600">{{ providers | selectattr("key", "equalto", saved.provider) | map(attribute="name") | first }}
+      · <span class="mono">{{ saved.model }}</span></div>
+    <div class="help" style="margin-top:2px">Key ending <span class="mono">…{{ saved.key_hint }}</span>
+      {% if saved.checked_ok %}· <span style="color:var(--ok)">working</span>
+      {% elif saved.checked_ok == false %}· <span style="color:var(--bad)">not working</span>{% endif %}</div>
+  </div>
+  <div style="display:flex;gap:8px">
+    <form method="post" action="/model/test"><button class="btn sm" type="submit">Test again</button></form>
+    <form method="post" action="/model/delete"><button class="btn sm" type="submit">Remove</button></form>
+  </div>
+</div>
+{% else %}
+<div class="note">Without a model, forms are filled from your profile only: anything it would have
+written (a "why this company" answer, a choice it would have made) comes back to you as a question,
+and jobs on Lever, Workday or company sites can't be applied to for you.</div>
+{% endif %}
+
+{% set current = picked or (saved.provider if saved else "groq") %}
+<form method="post" action="/model" class="panel setting-group" id="model-form">
+  <div class="setting">
+    <label>Provider</label>
+    <div class="ctl">
+      {% for p in providers %}
+      <label class="provider-choice">
+        <input type="radio" name="provider" value="{{ p.key }}" {% if p.key == current %}checked{% endif %}
+               data-model="{{ p.default_model }}" data-url="{{ p.key_url }}" data-strong="{{ 1 if p.strong_agent else 0 }}">
+        <span><strong>{{ p.name }}</strong><br><span class="help" style="margin:0">{{ p.blurb }}</span></span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="setting">
+    <label for="api_key">API key</label>
+    <div class="ctl">
+      <input id="api_key" name="api_key" type="password" autocomplete="off" style="width:100%"
+             placeholder="{{ 'Leave empty to keep …' ~ saved.key_hint if saved else 'Paste your key' }}">
+      <div class="help" id="key-help"><a id="key-link" href="#" target="_blank" rel="noopener">Get a key →</a>
+        It's encrypted before it's stored, and only ever used for your own account.</div>
+    </div>
+  </div>
+
+  <div class="setting">
+    <label for="model">Model</label>
+    <div class="ctl">
+      <input id="model" name="model" style="width:100%" value="{{ saved.model if saved else '' }}">
+      <div class="help">Leave as suggested unless you know you want another.</div>
+    </div>
+  </div>
+
+  <div class="setting" id="base-url-row">
+    <label for="base_url">Base URL</label>
+    <div class="ctl">
+      <input id="base_url" name="base_url" style="width:100%" placeholder="https://api.openai.com/v1"
+             value="{{ saved.base_url or '' if saved else '' }}">
+    </div>
+  </div>
+
+  <div class="setting">
+    <label></label>
+    <div class="ctl">
+      <div class="note warn" id="weak-agent" style="display:none">Fine for answering questions. Applying on
+        Lever, Workday and company sites takes up to thirty long steps per form; a free tier often hits its
+        rate limit partway, so those applications are slow and may come back to you.</div>
+      <button class="btn primary" type="submit" {% if not can_store %}disabled{% endif %}>Save and test</button>
+    </div>
+  </div>
+</form>
+
+<style>
+.provider-choice{display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer;font-weight:400}
+.provider-choice input{margin-top:3px;accent-color:var(--accent)}
+</style>
+<script>
+(function () {
+  var form = document.getElementById("model-form");
+  var model = document.getElementById("model");
+  var link = document.getElementById("key-link");
+  var baseRow = document.getElementById("base-url-row");
+  var weak = document.getElementById("weak-agent");
+  var savedProvider = {{ (saved.provider if saved else "") | tojson }};
+  function sync(changed) {
+    var r = form.querySelector('input[name="provider"]:checked');
+    if (!r) return;
+    var defaults = Array.prototype.map.call(form.querySelectorAll('input[name="provider"]'),
+      function (x) { return x.dataset.model; });
+    if (changed && (model.value === "" || defaults.indexOf(model.value) !== -1)) model.value = r.dataset.model;
+    if (!model.value) model.value = r.dataset.model;
+    link.style.display = r.dataset.url ? "" : "none";
+    link.href = r.dataset.url || "#";
+    baseRow.style.display = r.value === "openai_compatible" ? "" : "none";
+    weak.style.display = r.dataset.strong === "1" ? "none" : "";
+  }
+  form.addEventListener("change", function (e) { if (e.target.name === "provider") sync(true); });
+  sync(savedProvider === "");
+})();
+</script>
+{% endblock %}
