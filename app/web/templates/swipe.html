@@ -128,8 +128,9 @@
   const history = [];
   let saving = Promise.resolve();   // decisions are sent in order, off the UI path
   let fetching = false, exhausted = false, undoing = false;
-  // After the agent's deck runs dry, "Load more" widens it to every undecided
-  // match, including boards the agent cannot fill (those save, not apply).
+  // After the Greenhouse deck runs dry, "Load more" widens it to every undecided
+  // match on any site; the agent works out formats it has not seen yet. Only a
+  // job with no link at all saves instead of applying.
   let wider = false;
   const rightOf = c => c.agent === false ? 'save' : 'yes';
   const toast = (t) => window.showToast && window.showToast(t, true);
@@ -139,7 +140,9 @@
     const el = document.createElement('article');
     el.className = 'card';
     el.dataset.id = c.id;
-    const facts = (c.agent === false ? `<span class="self" title="The agent only fills Greenhouse forms">You apply · ${esc(c.board)}</span>` : '') +
+    const facts = (c.agent === false ? `<span class="self" title="No application link to start from">You apply · ${esc(c.board)}</span>`
+        : c.format === 'new' ? `<span class="self" title="The agent has not applied on ${esc(c.board)} yet; it will work the form out and remember how">Agent · new site · ${esc(c.board)}</span>`
+        : c.format === 'learned' ? `<span title="The agent has applied on ${esc(c.board)} before">Agent · ${esc(c.board)}</span>` : '') +
       c.facts.map(f => `<span>${esc(f)}</span>`).join('') +
       (c.applied_before ? `<span class="warn">Applied to ${esc(c.company)} before</span>` : '');
     const points = c.reasons.map(r => `<li>${esc(r)}</li>`).join('') + (c.concern ? `<li class="c">${esc(c.concern)}</li>` : '');
@@ -175,8 +178,8 @@
       const body = {
         loading: `<p>Loading…</p>`,
         more: `<div style="font-size:34px">🎉</div><h2>All caught up</h2>
-          <p>That's every match the agent can apply to.<br>Load more shows the rest &mdash; on other job sites,
-          a right swipe saves it for you to apply to yourself.</p>
+          <p>That's every Greenhouse match.<br>Load more shows the rest &mdash; on other job sites, the agent
+          works out each new form and remembers how for next time.</p>
           <button class="btn primary" type="button" id="b-more">Load more</button>`,
         end: `<div style="font-size:34px">🎉</div><h2>All caught up</h2>
           <p>New matches arrive with each daily search.</p>`,

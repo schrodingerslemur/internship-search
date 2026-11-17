@@ -1,6 +1,6 @@
 """SQLAlchemy models. Importing this package registers every table on ``Base``."""
 
-from app.models.autoapply import ApplicantDocument, ApplicantRecord, ApplyTask
+from app.models.autoapply import ApplicantDocument, ApplicantRecord, ApplyRecipe, ApplyTask
 from app.models.base import (
     KANBAN_ORDER,
     SOURCE_KIND_RANK,
@@ -45,6 +45,7 @@ __all__ = [
     "TERMINAL_STATUSES",
     "ApplicantDocument",
     "ApplicantRecord",
+    "ApplyRecipe",
     "Application",
     "ApplicationNote",
     "ApplyTask",

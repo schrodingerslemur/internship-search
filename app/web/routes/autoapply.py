@@ -93,7 +93,7 @@ def swipe_decide(
     if decision == "yes":
         if cloud.enqueue(db, user, job) is None:
             db.rollback()
-            return JSONResponse({"ok": False, "message": "No form the agent can fill for this one"})
+            return JSONResponse({"ok": False, "message": "No application link for the agent to start from"})
         db.commit()
         background.add_task(_wake_worker)
     elif decision == "save":
@@ -142,6 +142,7 @@ def autoapply_page(request: Request, db: Session = Depends(get_db), user: User =
             },
             "flash": {"text": flash, "bad": request.query_params.get("bad") == "1"} if flash else None,
             "documents": cloud.documents_for(db, user.id),
+            "recipes": cloud.recipes(db),
             "document_kinds": {k: name for k, (name, _) in DOCUMENT_KINDS.items()},
         },
     )

@@ -32,14 +32,17 @@ class ClaudeCodeAnswerer:
         self, *, facts: str, resume: str, posting: str, questions: list[dict]
     ) -> dict[str, dict]:
         self.calls += 1
-        prompt = _apply_prompt(facts, resume, posting, questions)
+        return parse_answers(self.complete_json(APPLY_SYSTEM, _apply_prompt(facts, resume, posting, questions)))
+
+    def complete_json(self, system: str, prompt: str, *, model: str | None = None) -> dict | None:
+        """One prompt in, one JSON object out, or None when the CLI fails."""
         try:
             done = subprocess.run(
                 [
                     self.binary, "-p",
-                    "--model", self.model,
+                    "--model", model or self.model,
                     "--output-format", "text",
-                    "--system-prompt", APPLY_SYSTEM,
+                    "--system-prompt", system,
                     # Answering from the text given needs no tools at all.
                     "--tools", "",
                     "--strict-mcp-config",
@@ -53,11 +56,11 @@ class ClaudeCodeAnswerer:
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             log.warning("agent_llm.failed", error=type(exc).__name__)
-            return {}
+            return None
         if done.returncode != 0:
             log.warning("agent_llm.exit", code=done.returncode, stderr=(done.stderr or "")[:200])
-            return {}
-        return parse_answers(_parse_json(done.stdout or ""))
+            return None
+        return _parse_json(done.stdout or "")
 
     def close(self) -> None:
         pass
@@ -90,6 +93,14 @@ class ChainedAnswerer:
             if replies:
                 return replies
         return {}
+
+    def complete_json(self, system: str, prompt: str) -> dict | None:
+        """The first writer that returns a JSON object: what the web agent thinks with."""
+        for answerer in self.answerers:
+            reply = answerer.complete_json(system, prompt)
+            if isinstance(reply, dict):
+                return reply
+        return None
 
     def close(self) -> None:
         for answerer in self.answerers:

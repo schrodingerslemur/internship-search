@@ -113,13 +113,14 @@ class TestDeck:
         make_job(session, 4, date_posted=now - timedelta(days=400))
         assert [c["id"] for c in cloud.deck(session, account)] == [evergreen.id, never_seen_new.id]
 
-    def test_load_more_adds_boards_the_agent_cannot_fill(self, session, account):
+    def test_load_more_adds_every_other_site_for_the_agent(self, session, account):
         now = utcnow()
         gh = make_job(session, 1, score=80)
         sr = make_job(
             session, 2, score=95, greenhouse=False,
             application_url="https://jobs.smartrecruiters.com/WesternDigital/1",
         )
+        nolink = make_job(session, 6, score=60, greenhouse=False, application_url="")
         stale = make_job(session, 3, score=70, date_posted=now - timedelta(days=30),
                          last_seen_at=now - timedelta(days=20))
         make_job(session, 4, greenhouse=False, priority=Priority.SKIP.value)
@@ -127,9 +128,16 @@ class TestDeck:
 
         assert [c["id"] for c in cloud.deck(session, account)] == [gh.id]
         cards = cloud.deck(session, account, wider=True, exclude={gh.id})
-        assert [c["id"] for c in cards] == [sr.id, stale.id]
-        assert cards[0]["agent"] is False and cards[0]["board"] == "SmartRecruiters"
-        assert cards[1]["agent"] is True
+        assert [c["id"] for c in cards] == [sr.id, stale.id, nolink.id]
+        assert cards[0]["agent"] is True and cards[0]["board"] == "SmartRecruiters"
+        assert cards[0]["format"] == "new"
+        assert cards[1]["agent"] is True and cards[1]["format"] == "greenhouse"
+        assert cards[2]["agent"] is False
+
+        cloud.save_recipe(session, "smartrecruiters", "SmartRecruiters", notes="1. Click Apply",
+                          outcome=SUBMITTED, url=None)
+        again = cloud.deck(session, account, wider=True, exclude={gh.id})
+        assert again[0]["format"] == "learned"
 
     def test_a_card_carries_only_what_it_shows(self, session, account):
         make_job(session, 1, description="x" * 5000, salary_min=None)
@@ -150,8 +158,16 @@ class TestQueue:
         assert first.status == QUEUED and first.form_key == "greenhouse:acme:1"
         assert user_jobs.status_of(user_jobs.get_state(session, account, job)) == JobStatus.SAVED.value
 
-    def test_a_job_without_a_form_is_refused(self, session, account):
-        assert cloud.enqueue(session, account, make_job(session, 1, greenhouse=False)) is None
+    def test_a_job_without_any_link_is_refused(self, session, account):
+        job = make_job(session, 1, greenhouse=False, application_url="")
+        assert cloud.enqueue(session, account, job) is None
+
+    def test_any_other_site_goes_to_the_agent_with_its_link(self, session, account):
+        job = make_job(session, 1, greenhouse=False,
+                       application_url="https://jobs.lever.co/acme/123/apply")
+        task = cloud.enqueue(session, account, job)
+        assert task.form_key == "agent:lever" and task.by_agent
+        assert task.form_url == "https://jobs.lever.co/acme/123/apply"
 
     def test_cancel_only_while_queued(self, session, account):
         job = make_job(session, 1)
@@ -403,10 +419,13 @@ class TestPages:
 
     def test_review_tab_offers_apply_for_me_only_where_the_agent_can(self, signed_in, session, account):
         gh = make_job(session, 1, company="Greenco")
-        make_job(session, 2, company="Otherco", greenhouse=False)
+        lever = make_job(session, 2, company="Otherco", greenhouse=False,
+                         application_url="https://jobs.lever.co/o/1")
+        make_job(session, 3, company="Nolinkco", greenhouse=False, application_url="")
         page = signed_in.get("/").text
+        assert f'action="/job/{lever.id}/autoapply"' in page
         assert f'action="/job/{gh.id}/autoapply"' in page
-        assert page.count("Apply for me") == 1
+        assert page.count("Apply for me") == 2
 
         r = signed_in.post(f"/job/{gh.id}/autoapply", data={"view": "review"}, headers={"HX-Request": "true"})
         assert r.status_code == 200 and "The agent is applying" in r.text
@@ -419,8 +438,8 @@ class TestPages:
         session.refresh(task)
         assert task.status == "cancelled"
 
-    def test_apply_for_me_refuses_a_form_the_agent_cannot_fill(self, signed_in, session):
-        job = make_job(session, 1, greenhouse=False)
+    def test_apply_for_me_refuses_a_job_without_a_link(self, signed_in, session):
+        job = make_job(session, 1, greenhouse=False, application_url="")
         assert signed_in.post(f"/job/{job.id}/autoapply").status_code == 400
 
     def test_a_needed_file_is_uploaded_from_the_card_and_the_task_retried(self, signed_in, session, account):

@@ -17,11 +17,21 @@ import httpx
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, defer, load_only, selectinload
 
+from app.apply.formats import format_of
 from app.apply.picker import greenhouse_form
 from app.apply.profile import ApplicantProfile, StandingAnswer
 from app.config import get_settings
 from app.logging_setup import get_logger
-from app.models import ApplicantDocument, ApplicantRecord, ApplyTask, Job, JobListing, User, UserJobState
+from app.models import (
+    ApplicantDocument,
+    ApplicantRecord,
+    ApplyRecipe,
+    ApplyTask,
+    Job,
+    JobListing,
+    User,
+    UserJobState,
+)
 from app.models.autoapply import (
     CANCELLED,
     FAILED,
@@ -170,7 +180,8 @@ def deck(
         )
     }
     applied_before = _applied_companies(session, user)
-    return [_card(job, st, blurbs.get(job.id), applied_before) for job, st in picked]
+    learned = learned_formats(session)
+    return [_card(job, st, blurbs.get(job.id), applied_before, learned) for job, st in picked]
 
 
 def _deck_filters(now: datetime, wider: bool) -> tuple:
@@ -191,19 +202,12 @@ def _deck_filters(now: datetime, wider: bool) -> tuple:
 
 
 def _board_name(job: Job) -> str:
-    """Where the application form lives, for "you apply on ..." on a card."""
-    url = (job.application_url or job.posting_url or "").lower()
-    for needle, name in (
-        ("smartrecruiters", "SmartRecruiters"), ("myworkdayjobs", "Workday"), ("workday", "Workday"),
-        ("lever.co", "Lever"), ("ashbyhq", "Ashby"), ("icims", "iCIMS"), ("taleo", "Taleo"),
-        ("successfactors", "SuccessFactors"), ("eightfold", "Eightfold"), ("jobvite", "Jobvite"),
-    ):
-        if needle in url:
-            return name
-    return "the company site"
+    """Where the application form lives, for "Agent · Workday" on a card."""
+    found = format_of(job_apply_url(job))
+    return found[1] if found else "the company site"
 
 
-def _card(job: Job, st, blurb, applied_before: set[str]) -> dict:
+def _card(job: Job, st, blurb, applied_before: set[str], learned: dict[str, int] | None = None) -> dict:
     from app.web.templating import salary_text
 
     facts, text = blurb or (None, "")
@@ -232,9 +236,19 @@ def _card(job: Job, st, blurb, applied_before: set[str]) -> dict:
         "applied_before": (job.company_name or "").lower() in applied_before,
         "summary": summary,
         "url": job.posting_url or job.application_url or "",
-        "agent": greenhouse_form(job) is not None,
+        "agent": greenhouse_form(job) is not None or bool(job_apply_url(job)),
+        # The general agent fills it; "new" until it has applied on that format once.
+        "format": _format_state(job, learned or {}),
         "board": _board_name(job),
     }
+
+
+def _format_state(job: Job, learned: dict[str, int]) -> str:
+    """greenhouse, learned (the agent has applied on this format before) or new."""
+    if greenhouse_form(job) is not None:
+        return "greenhouse"
+    found = format_of(job_apply_url(job))
+    return "learned" if found and learned.get(found[0], 0) > 0 else "new"
 
 
 def _applied_companies(session: Session, user: User) -> set[str]:
@@ -277,20 +291,47 @@ def form_for(session: Session, job: Job):
     return from_listing("", None, [job.application_url, job.posting_url])
 
 
+def job_apply_url(job: Job, session: Session | None = None) -> str | None:
+    """Where a person would start applying: the application link, else the posting."""
+    urls = [job.application_url]
+    if session is not None:
+        urls += [
+            u
+            for apply_url, url in session.execute(
+                select(JobListing.apply_url, JobListing.url).where(JobListing.job_id == job.id)
+            )
+            for u in (apply_url, url)
+        ]
+    urls.append(job.posting_url)
+    return next((u for u in urls if u and u.startswith("http")), None)
+
+
 def enqueue(session: Session, user: User, job: Job) -> ApplyTask | None:
-    """Approve one application. None when the job has no form we can submit."""
+    """Approve one application. None when the job has no link to apply from.
+
+    A Greenhouse form is filled by its own code; anything else goes to the
+    general agent, which works the form out (app/apply/agent.py).
+    """
     form = form_for(session, job)
-    if form is None:
-        return None
+    url = None
+    if form is not None:
+        key = form.key
+    else:
+        url = job_apply_url(job, session)
+        found = format_of(url)
+        if found is None:
+            return None
+        key = f"agent:{found[0]}"
     task = session.scalar(
         select(ApplyTask).where(ApplyTask.user_id == user.id, ApplyTask.job_id == job.id)
     )
     now = utcnow()
     if task is None:
-        task = ApplyTask(user_id=user.id, job_id=job.id, form_key=form.key, queued_at=now)
+        task = ApplyTask(user_id=user.id, job_id=job.id, form_key=key, queued_at=now)
         session.add(task)
     elif task.status in (SUBMITTED, RUNNING):
         return task
+    task.form_key, task.apply_url = key, url
     task.status, task.detail, task.queued_at = QUEUED, None, now
     task.finished_at = None
     # Saved, not applied: the tracker says applied only once a form went in.
@@ -596,6 +637,44 @@ def profile_json(record: ApplicantRecord | None) -> str:
         except OSError:
             return json.dumps(profile_data(ApplicantProfile()), indent=2)
     return json.dumps(record.data, indent=2)
+
+
+# ------------------------------------------------- how-tos, per format
+
+
+def learned_formats(session: Session) -> dict[str, int]:
+    """format key -> successful applications, for every format tried so far."""
+    return {k: n or 0 for k, n in session.execute(select(ApplyRecipe.format_key, ApplyRecipe.successes))}
+
+
+def recipe_for(session: Session, format_key: str) -> ApplyRecipe | None:
+    return session.scalar(select(ApplyRecipe).where(ApplyRecipe.format_key == format_key))
+
+
+def recipes(session: Session) -> list[ApplyRecipe]:
+    return list(session.scalars(select(ApplyRecipe).order_by(ApplyRecipe.updated_at.desc())))
+
+
+def save_recipe(
+    session: Session, format_key: str, name: str, *, notes: str, outcome: str, url: str | None
+) -> ApplyRecipe:
+    """Record how an attempt on this format went, and the agent's rewritten how-to.
+
+    An attempt that learned nothing (no notes) keeps the previous how-to.
+    """
+    recipe = recipe_for(session, format_key)
+    if recipe is None:
+        recipe = ApplyRecipe(format_key=format_key, name=name[:120], notes="", successes=0, failures=0)
+        session.add(recipe)
+    if notes.strip():
+        recipe.notes = notes.strip()
+    if outcome == SUBMITTED:
+        recipe.successes = (recipe.successes or 0) + 1
+    elif outcome in (NEEDS_YOU, FAILED):
+        recipe.failures = (recipe.failures or 0) + 1
+    recipe.last_outcome, recipe.last_url = outcome, url
+    session.flush()
+    return recipe
 
 
 # ------------------------------------------------------ waking the worker

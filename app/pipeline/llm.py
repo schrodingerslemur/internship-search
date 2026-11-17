@@ -399,6 +399,10 @@ class LlmClient:
 
     # -- application answers --
 
+    def complete_json(self, system: str, prompt: str, *, max_tokens: int = 3000) -> dict | None:
+        """A raw JSON completion, for callers with their own prompt (the web agent)."""
+        return self._complete(system, prompt, max_tokens=max_tokens)
+
     def answer_application_questions(
         self, *, facts: str, resume: str, posting: str, questions: list[dict]
     ) -> dict[str, dict]:

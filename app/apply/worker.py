@@ -1,6 +1,8 @@
-"""The cloud worker: drain the swipe queue, one Greenhouse form at a time.
+"""The cloud worker: drain the swipe queue, one application at a time.
 
-Runs on GitHub Actions (see .github/workflows/autoapply.yml). For each task:
+Runs on GitHub Actions (see .github/workflows/autoapply.yml). A form on any
+site but Greenhouse goes to the general agent (app/apply/agent.py, see
+``_process_agent``). For each Greenhouse task:
 
 1. Prepare every answer before touching a browser -- profile fields, the
    user's standing answers, rules, then a model for the free-text "why us".
@@ -112,6 +114,8 @@ def _process(task_id: int, answerer, *, dry_run: bool) -> Outcome:
         problems = readiness(record)
         if problems:
             return Outcome(NEEDS_YOU, "Your auto-apply profile is incomplete: " + "; ".join(problems) + ".")
+        if task.by_agent:
+            return _process_agent(session, task, job, record, answerer, dry_run=dry_run)
         _, token, job_id = task.form_key.split(":", 2)
         form = greenhouse.GreenhouseJob(token, job_id)
         company, title, canonical = job.company_name, job.title, job.canonical_job_id
@@ -158,16 +162,121 @@ def _process(task_id: int, answerer, *, dry_run: bool) -> Outcome:
             )
         return _fill_and_submit(draft, profile, dry_run=dry_run, task_id=task_id)
 
+def _launch(p):
+    try:
+        return p.chromium.launch(channel="chrome", headless=True)
+    except Exception:
+        return p.chromium.launch(headless=True)
+
+
+# ------------------------------------------------- any other format: the agent
+
+
+def _process_agent(session, task: ApplyTask, job: Job, record, answerer, *, dry_run: bool) -> Outcome:
+    """A form with no code of its own: the general agent works it out.
+
+    Called inside the reading session; everything needed is copied out of it
+    first, then the session is left alone while the browser runs.
+    """
+    from app.apply.cloud import recipe_for
+    from app.apply.formats import format_of
+
+    task_id, url = task.id, task.form_url
+    found = format_of(url)
+    if found is None:
+        return Outcome(FAILED, "There is no application link for this job.")
+    format_key, format_name = found
+    recipe = recipe_for(session, format_key)
+    notes = recipe.notes if recipe else ""
+    company, title = job.company_name or "", job.title or ""
+    posting = " ".join((job.description or "").split())[:3000]
+    resume_name = Path(record.resume_filename or "resume.pdf").name
+    resume_bytes = record.resume_bytes
+    profile = profile_from_record(record)
+    documents = [
+        (d.kind, Path(d.filename).name, d.content)
+        for d in session.query(ApplicantDocument).filter_by(user_id=task.user_id)
+    ]
+    session.commit()  # release the connection before minutes of browsing
+
+    from app.apply.agent import briefing
+    from app.apply.profile import resume_text
+
+    with tempfile.TemporaryDirectory() as tmp:
+        files = {"resume": str(Path(tmp) / resume_name)}
+        Path(files["resume"]).write_bytes(resume_bytes)
+        profile.resume_path = files["resume"]
+        for kind, filename, content in documents:
+            path = Path(tmp) / kind / filename
+            path.parent.mkdir()
+            path.write_bytes(content)
+            files[kind] = str(path)
+        try:
+            resume = resume_text(profile)
+        except Exception:  # an unreadable PDF still gets uploaded; the model just reads less
+            resume = ""
+        brief = briefing(profile, resume=resume, company=company, title=title, posting=posting)
+        result, shot = _run_agent(
+            url, answerer, briefing=brief, files=files, recipe=notes, task_id=task_id, dry_run=dry_run
+        )
+
+    if isinstance(result, str):
+        return Outcome(NEEDS_YOU, f"The agent hit an error ({result}).", shot)
+    status = {"submitted": SUBMITTED, "ready": QUEUED, "failed": FAILED}.get(result.status, NEEDS_YOU)
+    if not dry_run:
+        with session_scope() as s:
+            from app.apply.cloud import save_recipe
+
+            save_recipe(s, format_key, format_name, notes=result.lessons, outcome=status, url=url)
+    with session_scope() as s:
+        t = s.get(ApplyTask, task_id)
+        t.answers = [{**f, "source": "agent", "required": False} for f in result.filled]
+        t.left_for_you = [
+            {**q, **({"kind": document_kind(q["label"]) or "other"} if q["type"] == "file" else {})}
+            for q in result.questions
+        ]
+    say = f"{format_name}: " if status != SUBMITTED else ""
+    detail = result.detail if status != SUBMITTED else f"Submitted on {format_name}; the site confirmed it."
+    return Outcome(status, (say + detail)[:500], shot)
+
+
+def _run_agent(url: str, answerer, *, briefing: str, files: dict, recipe: str, task_id: int, dry_run: bool):
+    """(AgentResult, screenshot), or (the exception's name, screenshot) on a crash."""
+    from playwright.sync_api import sync_playwright
+
+    from app.apply.agent import WebAgent
+
+    submitted_at = datetime.now().astimezone()
+    with sync_playwright() as p:
+        browser = _launch(p)
+        try:
+            page = browser.new_context(viewport={"width": 1280, "height": 900}).new_page()
+            agent = WebAgent(
+                page,
+                answerer.complete_json,
+                briefing=briefing,
+                files=files,
+                recipe=recipe,
+                on_code=lambda retry: _wait_for_code(task_id, submitted_at, retry=retry),
+                dry_run=dry_run,
+            )
+            try:
+                result = agent.run(url)
+            except Exception as exc:
+                log.exception("autoapply.agent_crashed", task_id=task_id)
+                result = type(exc).__name__
+            return result, _shot(page)
+        finally:
+            browser.close()
+
+
 def _fill_and_submit(draft: Draft, profile, *, dry_run: bool, task_id: int) -> Outcome:
     from playwright.sync_api import sync_playwright
 
     from app.apply.browser import fill
 
     with sync_playwright() as p:
-        try:
-            browser = p.chromium.launch(channel="chrome", headless=True)
-        except Exception:
-            browser = p.chromium.launch(headless=True)
+        browser = _launch(p)
         try:
             page = browser.new_context(viewport={"width": 1280, "height": 900}).new_page()
             report = fill(page, draft, profile)
@@ -251,8 +360,8 @@ def _wait_for_code(task_id: int | None, submitted_at: datetime, *, retry: bool) 
     from app.apply.inbox import credentials, wait_for_security_code
 
     if task_id is not None:
-        _set_waiting(task_id, "That code was not accepted. Enter the newest code Greenhouse emailed you."
-                     if retry else "Greenhouse emailed you a security code. Enter it here.")
+        _set_waiting(task_id, "That code was not accepted. Enter the newest code the site emailed you."
+                     if retry else "The application site emailed you a security code. Enter it here.")
     has_inbox = credentials() is not None and not retry
     deadline = time.monotonic() + CODE_WAIT_S
     next_inbox = time.monotonic()

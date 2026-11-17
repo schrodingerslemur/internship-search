@@ -34,3 +34,6 @@ data/apply/
 Thumbs.db
 .vscode/
 .idea/
+
+# Personal documents dropped in the project root (transcripts, resumes).
+/*.pdf

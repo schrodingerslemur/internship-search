@@ -204,14 +204,17 @@ templates.env.globals["group_jobs"] = group_jobs
 
 
 def agent_can_apply(job) -> bool:
-    """Whether the auto-apply agent can fill this job's form (Greenhouse only).
+    """Whether the auto-apply agent can try this job: it has a link to apply from.
 
-    Reads only URLs already on the row and its eagerly loaded listings.
+    Greenhouse forms are filled by their own code; any other format by the
+    general agent. Reads only URLs already on the row and its loaded listings.
     """
     from app.apply.picker import greenhouse_form
 
     try:
-        return greenhouse_form(job) is not None
+        return greenhouse_form(job) is not None or any(
+            (u or "").startswith("http") for u in (job.application_url, job.posting_url)
+        )
     except Exception:  # a detached or partial row: just hide the button
         return False
 

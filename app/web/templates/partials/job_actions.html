@@ -86,7 +86,8 @@
 
     {% if agent_can_apply(job) %}
       {# Same approval as a right swipe: the cloud agent fills and submits the
-         Greenhouse form, and the job sits in Saved until it goes in. #}
+         form -- Greenhouse by its own code, any other site by working it out --
+         and the job sits in Saved until it goes in. #}
       <form method="post" action="/job/{{ job.id }}/autoapply"
             hx-post="/job/{{ job.id }}/autoapply" hx-target="{{ target }}" hx-swap="outerHTML" hx-disabled-elt="find button"
             style="margin:0">

@@ -280,7 +280,7 @@ def job_autoapply(
     previous = user_jobs.status_of(user_jobs.get_state(db, user, job))
     if cloud.enqueue(db, user, job) is None:
         db.rollback()
-        return HTMLResponse("The agent can only fill Greenhouse forms", status_code=400)
+        return HTMLResponse("This job has no application link for the agent to start from", status_code=400)
     db.commit()
     background.add_task(_wake_worker)
     return _decision_response(

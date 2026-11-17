@@ -396,8 +396,26 @@ What the worker does per task, and where it stops:
 |---|---|
 | Answer every question: profile → your standing answers → rules → Claude for the rest | a **required** question can't be answered from your profile or resume (never guessed) |
 | Fill the form in headless Chrome | a required answer can't be placed on the page |
-| Click Submit, wait for Greenhouse's confirmation | the form shows errors, a CAPTCHA challenge appears, or no confirmation comes |
+| Click Submit, wait for the confirmation | the form shows errors, a CAPTCHA challenge appears, or no confirmation comes |
 | Greenhouse emails a security code | it has no IMAP access to your inbox, or the email doesn't arrive in 2 min |
+
+### Any other site: the general agent
+
+Jobs on Lever, Ashby, Workday, SmartRecruiters or a company's own careers page
+can be swiped right too (under **Load more**), or sent with **Apply for me** on
+Review. There is no per-site code for these: `app/apply/agent.py` opens the
+application link, reads every field, button and iframe on the page into a
+numbered list, and asks Claude what to do next, turn by turn, until the site
+confirms the application. The same rules hold: facts only from your profile
+and resume, a missing fact comes back to you as a question, and "submitted"
+counts only when the site's confirmation text is on the page.
+
+Every attempt ends with the agent writing down **how to apply on that site**
+(`apply_recipes`, one per format: `lever`, `workday`, `site:nvidia.com`, …),
+and the next form on the same format starts from those notes. They're listed
+under **Sites the agent has learned** on Auto-apply status. It does not create
+accounts; a site that needs a sign-in, or one behind bot protection
+(SmartRecruiters' DataDome), comes back as "needs you".
 
 Only a confirmed submission is marked **Applied** in the tracker. A closed
 posting is marked failed. Handed-back tasks get **Open the form**, **I applied

@@ -130,7 +130,7 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
       <details class="sent"><summary>{{ 'What was sent' if t.status == 'submitted' else 'Prepared answers' }}{% if t.has_screenshot %} · <a href="/autoapply/task/{{ t.id }}/screenshot" target="_blank">screenshot</a>{% endif %}</summary>
         <table>{% for a in t.answers %}<tr><td>{{ a.label }}</td>
           <td>{{ a.value|join(', ') if a.value is iterable and a.value is not string else a.value }}</td>
-          <td class="src">{{ {'ai':'AI-written','rule':'rule','standing':'your answer','profile':'profile'}.get(a.source, a.source) }}</td></tr>{% endfor %}</table>
+          <td class="src">{{ {'ai':'AI-written','rule':'rule','standing':'your answer','profile':'profile','agent':'agent'}.get(a.source, a.source) }}</td></tr>{% endfor %}</table>
       </details>
       {% endif %}
     </div>
@@ -144,6 +144,21 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
   <div class="empty"><div class="icon">🃏</div><h2>Nothing yet</h2>
     <p>Swipe right on a job and the agent applies for you.</p>
     <a class="btn primary" href="/swipe">Start swiping</a></div>
+  {% endif %}
+
+  {% if recipes %}
+  <details class="prof" id="formats">
+    <summary>Sites the agent has learned ({{ recipes|length }})</summary>
+    <p class="sub" style="margin:8px 0">Greenhouse has its own filler. On any other site the agent works the form
+      out, then writes down how, and reads that before the next form on the same site.</p>
+    {% for r in recipes %}
+    <details class="sent">
+      <summary>{{ r.name }} · {{ r.successes or 0 }} submitted{% if r.failures %}, {{ r.failures }} handed back{% endif %}
+        · {{ r.updated_at|timeago }}</summary>
+      <pre style="white-space:pre-wrap;margin:6px 0">{{ r.notes or 'Nothing written yet.' }}</pre>
+    </details>
+    {% endfor %}
+  </details>
   {% endif %}
 
   <details class="prof" id="profile" {% if problems %}open{% endif %}>
