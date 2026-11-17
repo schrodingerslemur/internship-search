@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Welcome · Internship Search{% endblock %}
+{% block content %}
+{#
+  A new account's setup (app/services/onboarding.py): documents, then a short
+  chat on the user's own model, then a review form. Nothing is saved to the
+  account's search until the review is confirmed.
+#}
+<h1>Welcome</h1>
+<div class="sub">
+  {% if state.step == "documents" %}Step 1 of 3: your documents. It takes about five minutes all together.
+  {% elif state.step == "chat" %}Step 2 of 3: a few questions ({{ asked }} of at most {{ max_questions }} answered).
+  {% else %}Step 3 of 3: check what it learned, then start searching.{% endif %}
+</div>
+
+{% if error %}<div class="flash bad">{{ error }}</div>{% endif %}
+
+{% if state.step == "documents" %}
+<form method="post" action="/welcome/documents" enctype="multipart/form-data" class="panel setting-group" data-busy>
+  <div class="setting">
+    <label for="resume">Resume</label>
+    <div class="ctl">
+      <input id="resume" name="resume" type="file" accept=".pdf,.docx" required>
+      <div class="help">PDF is best: it's also what gets attached to your applications.</div>
+    </div>
+  </div>
+  <div class="setting">
+    <label for="transcript">Transcript</label>
+    <div class="ctl">
+      <input id="transcript" name="transcript" type="file" accept=".pdf,.docx">
+      <div class="help">Optional. Unofficial is fine; it's attached wherever a form asks for one.</div>
+    </div>
+  </div>
+  <div class="setting">
+    <label></label>
+    <div class="ctl">
+      {% if not has_model %}
+      <div class="note">You haven't connected a model, so there's no chat: you'll fill in a short form instead.
+        <a href="/model">Connect one</a> (Groq is free and takes a minute) for the chat, and for answers on
+        application forms.</div>
+      {% endif %}
+      <button class="btn primary" type="submit">Continue</button>
+    </div>
+  </div>
+</form>
+<form method="post" action="/welcome/skip" style="margin-top:12px">
+  <button class="btn sm" type="submit">Skip setup for now</button>
+</form>
+
+{% elif state.step == "chat" %}
+<div class="panel chat">
+  {% for m in state.messages %}
+  <div class="msg {{ m.role }}"{% if loop.last %} id="latest"{% endif %}>{{ m.text }}</div>
+  {% else %}
+  <div class="help">The chat hasn't started yet.</div>
+  {% endfor %}
+</div>
+{% if has_model %}
+<form method="post" action="/welcome/chat" class="chat-form" data-busy>
+  {% if state.messages and state.messages[-1].role == "assistant" %}
+  <textarea name="message" rows="2" required autofocus placeholder="Your answer"></textarea>
+  <button class="btn primary" type="submit">Send</button>
+  {% else %}
+  <button class="btn primary" type="submit">{{ "Try again" if state.messages else "Start" }}</button>
+  {% endif %}
+</form>
+{% else %}
+<div class="note">No model is connected. <a href="/model">Connect one</a>, or go on to the form.</div>
+{% endif %}
+<form method="post" action="/welcome/review" style="margin-top:12px">
+  <button class="btn sm" type="submit">Skip to the review</button>
+</form>
+
+{% else %}
+<form method="post" action="/welcome/finish" class="review">
+  {% for heading, rows in sections %}
+  <h2>{{ heading }}</h2>
+  <div class="panel setting-group">
+    {% for name, label, help in rows %}
+    {% set value = state.draft.get(name) %}
+    {% set kind = kinds[name] %}
+    <div class="setting">
+      <label for="f-{{ name }}">{{ label }}</label>
+      <div class="ctl">
+        {% if kind == "bool" %}
+        <select id="f-{{ name }}" name="{{ name }}">
+          <option value="" {% if value is none %}selected{% endif %}>Not sure</option>
+          <option value="yes" {% if value == true %}selected{% endif %}>Yes</option>
+          <option value="no" {% if value == false %}selected{% endif %}>No</option>
+        </select>
+        {% elif kind == "list" %}
+        <textarea id="f-{{ name }}" name="{{ name }}" rows="{{ [3, (value or [])|length + 1]|max if value else 2 }}">{{ (value or []) | join("\n") }}</textarea>
+        {% else %}
+        <input id="f-{{ name }}" name="{{ name }}" style="width:100%" value="{{ value if value is not none else '' }}">
+        {% endif %}
+        {% if help %}<div class="help">{{ help }}</div>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+  <div style="margin:16px 0">
+    <button class="btn primary" type="submit">Save and start searching</button>
+  </div>
+</form>
+{% endif %}
+
+<style>
+.chat{display:flex;flex-direction:column;gap:10px;max-height:60vh;overflow-y:auto}
+.msg{padding:9px 12px;border-radius:10px;max-width:85%;white-space:pre-wrap;line-height:1.45}
+.msg.assistant{background:var(--panel-2);align-self:flex-start}
+.msg.user{background:var(--accent);color:#fff;align-self:flex-end}
+.chat-form{display:flex;gap:8px;margin-top:10px;align-items:flex-end}
+.chat-form textarea{flex:1}
+.review h2{font-size:15px;margin:18px 0 8px}
+</style>
+<script>
+(function () {
+  document.querySelectorAll("form[data-busy]").forEach(function (form) {
+    form.addEventListener("submit", function () {
+      var b = form.querySelector('button[type="submit"]');
+      if (b) { b.disabled = true; b.textContent = "Thinking…"; }
+    });
+  });
+  var chat = document.querySelector(".chat");
+  if (chat) chat.scrollTop = chat.scrollHeight;
+  var box = document.querySelector('.chat-form textarea');
+  if (box) box.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); box.form.requestSubmit(); }
+  });
+})();
+</script>
+{% endblock %}

@@ -277,3 +277,25 @@ class UserLlmSetting(Base, TimestampMixin):
     checked_ok: Mapped[bool | None] = mapped_column(Boolean)
     check_detail: Mapped[str | None] = mapped_column(String(300))
     checked_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class OnboardingState(Base, TimestampMixin):
+    """A new account's setup: the short chat and the draft it builds.
+
+    The draft is a flat dict of what the chat (or the plain form) learned; it
+    is written to the user's preferences, profile and applicant record only
+    when they confirm it on the review screen (app/services/onboarding.py).
+    """
+
+    __tablename__ = "onboarding_states"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    #: [{"role": "assistant" | "user", "text": ...}, ...]
+    messages: Mapped[list] = mapped_column(JSON, default=list)
+    draft: Mapped[dict] = mapped_column(JSON, default=dict)
+    #: documents -> chat -> review; "form" is review without a chat.
+    step: Mapped[str] = mapped_column(String(20), default="documents")
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)

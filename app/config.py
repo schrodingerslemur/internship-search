@@ -112,6 +112,10 @@ class Settings(BaseSettings):
     owner_email: str | None = None
     #: Fernet key that seals the API keys users save (app/services/secretbox.py).
     secrets_key: str | None = None
+    #: When set, creating an account (other than the very first) needs this
+    #: code: share it with the people you invite. Several may be given,
+    #: comma-separated. Unset, anyone who finds the site can sign up.
+    signup_invite_code: str | None = None
 
     # ---- Scheduler ----
     scheduler_enabled: bool = True

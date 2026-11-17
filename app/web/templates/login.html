@@ -49,6 +49,14 @@
         </label>
         {% endif %}
 
+        {% if mode == "signup" and needs_invite %}
+        <label>
+          <span>Invite code</span>
+          <input type="text" name="invite" value="{{ invite or '' }}" required autocomplete="off"
+                 placeholder="From whoever sent you the link">
+        </label>
+        {% endif %}
+
         {% if mode != "reset" %}
         <label>
           <span>Email</span>

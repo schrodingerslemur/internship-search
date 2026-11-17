@@ -96,6 +96,10 @@ def _flash(request: Request) -> dict | None:
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)) -> HTMLResponse:
     """The feed: everything still awaiting a decision."""
+    from app.services import onboarding
+
+    if onboarding.pending(db, user.id):
+        return RedirectResponse("/welcome", status_code=303)
     return templates.TemplateResponse(
         request, "dashboard.html", _job_page_context(request, db, user, "review")
     )

@@ -39,6 +39,10 @@ services:
       # own model credentials. Unset: the first account created.
       - key: OWNER_EMAIL
         sync: false
+      # Invite-only signups: the code you give the people you invite
+      # (comma-separate several). Unset: anyone with the link can sign up.
+      - key: SIGNUP_INVITE_CODE
+        sync: false
       # The GitHub Actions workflow owns the schedule. A second scheduler here
       # would send every digest twice.
       - key: SCHEDULER_ENABLED

@@ -419,7 +419,16 @@ accounts; a site that needs a sign-in, or one behind bot protection
 
 ### Other people's accounts: everyone brings their own model
 
-Anyone can sign up, and nothing they do runs on your quota. Under **Your
+Set `SIGNUP_INVITE_CODE` on Render and only people you give the code to can
+sign up (the first account, yours, never needs it). A new account starts on
+**Welcome**: upload a resume and, optionally, a transcript; their model reads
+both and asks at most five short questions about what the documents can't say
+(roles, places, terms, companies, work authorization); then they review
+everything as an ordinary form before it becomes their search, profile and
+application details. Without a model the chat is skipped and the form is
+filled from the resume alone.
+
+Nothing they do runs on your quota. Under **Your
 model** (account menu) each person connects their own: a free Groq key (the
 page links straight to where it is made), an Anthropic API key, Gemini, or any
 OpenAI-compatible endpoint. Saving makes one tiny test call and says whether it

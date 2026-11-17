@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -79,8 +80,27 @@ async def signup_form(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         request,
         "login.html",
-        {"mode": "signup", "any_accounts": auth.account_count(db) > 0},
+        {
+            "mode": "signup",
+            "any_accounts": auth.account_count(db) > 0,
+            "needs_invite": _needs_invite(db),
+        },
     )
+
+
+def _invite_codes() -> list[str]:
+    raw = get_settings().signup_invite_code or ""
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+
+def _needs_invite(db: Session) -> bool:
+    """An invite code is asked for once anyone has an account, if one is set."""
+    return bool(_invite_codes()) and auth.claimable_legacy_account(db) is None and auth.account_count(db) > 0
+
+
+def _invite_ok(code: str) -> bool:
+    given = code.strip().encode()
+    return any(hmac.compare_digest(given, c.encode()) for c in _invite_codes())
 
 
 @router.post("/signup", include_in_schema=False)
@@ -89,15 +109,26 @@ async def signup(
     email: str = Form(...),
     password: str = Form(...),
     name: str = Form(""),
+    invite: str = Form(""),
     db: Session = Depends(get_db),
 ):
     def fail(message: str, status: int = 400):
         return templates.TemplateResponse(
             request,
             "login.html",
-            {"mode": "signup", "error": message, "email": email, "name": name},
+            {
+                "mode": "signup",
+                "error": message,
+                "email": email,
+                "name": name,
+                "invite": invite,
+                "needs_invite": _needs_invite(db),
+            },
             status_code=status,
         )
+
+    if _needs_invite(db) and not _invite_ok(invite):
+        return fail("That invite code isn't right. Ask whoever sent you the link for it.", status=403)
 
     email_clean = auth.normalise_email(email)
     if "@" not in email_clean:
@@ -125,9 +156,16 @@ async def signup(
         db.commit()
         return _redirect_with_session(legacy, _signing_key(request))
 
+    # Everyone after the first account (the deployment's owner) starts with a
+    # short setup: their documents, a few questions, a review.
+    newcomer = auth.account_count(db) > 0
     user = auth.create_account(db, email=email_clean, password=password, name=name or None)
+    if newcomer:
+        from app.services import onboarding
+
+        onboarding.begin(db, user)
     db.commit()
-    return _redirect_with_session(user, _signing_key(request))
+    return _redirect_with_session(user, _signing_key(request), "/welcome" if newcomer else "/")
 
 
 @router.post("/logout", include_in_schema=False)

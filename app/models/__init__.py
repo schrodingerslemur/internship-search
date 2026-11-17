@@ -33,6 +33,7 @@ from app.models.tracking import (
 from app.models.user import (
     AppConfig,
     CandidateProfile,
+    OnboardingState,
     Resume,
     User,
     UserJobState,
@@ -78,6 +79,7 @@ __all__ = [
     "User",
     "AppConfig",
     "UserJobState",
+    "OnboardingState",
     "UserLlmSetting",
     "UserPreference",
     "utcnow",
