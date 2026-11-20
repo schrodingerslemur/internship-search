@@ -189,9 +189,18 @@ def find_by_email(session: Session, email: str) -> User | None:
 
 
 def create_account(
-    session: Session, *, email: str, password: str, name: str | None = None
+    session: Session,
+    *,
+    email: str,
+    password: str,
+    name: str | None = None,
+    verified: bool = True,
 ) -> User:
-    """Create an account with its own preferences and profile."""
+    """Create an account with its own preferences and profile.
+
+    ``verified=False`` leaves it unable to sign in until the link sent to its
+    email is clicked (app/services/email_verify.py).
+    """
     from app.services.preferences import initialise_user
 
     user = User(
@@ -199,6 +208,7 @@ def create_account(
         name=name or normalise_email(email).split("@")[0],
         password_hash=hash_password(password),
         is_active=True,
+        email_verified_at=utcnow() if verified else None,
     )
     session.add(user)
     session.flush()
@@ -250,6 +260,8 @@ def claim_account(session: Session, user: User, *, email: str, password: str, na
     if name:
         user.name = name
     user.is_active = True
+    if user.email_verified_at is None:
+        user.email_verified_at = utcnow()
     session.flush()
     log.info("auth.legacy_account_claimed", user_id=user.id)
     return user

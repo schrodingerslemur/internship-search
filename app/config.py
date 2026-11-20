@@ -116,6 +116,14 @@ class Settings(BaseSettings):
     #: code: share it with the people you invite. Several may be given,
     #: comma-separated. Unset, anyone who finds the site can sign up.
     signup_invite_code: str | None = None
+    #: When set, only these addresses may create an account (the very first
+    #: account and OWNER_EMAIL excepted). Comma-separated; an entry starting
+    #: with "@" allows a whole domain, e.g. "friend@gmail.com, @andrew.cmu.edu".
+    signup_allowed_emails: str | None = None
+    #: New accounts (all but the first) must click a link sent to their email
+    #: before they can sign in. Needs SMTP; without it, signups are refused
+    #: rather than let through unverified.
+    signup_verify_email: bool = True
 
     # ---- Scheduler ----
     scheduler_enabled: bool = True

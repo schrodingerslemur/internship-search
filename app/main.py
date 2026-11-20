@@ -86,7 +86,8 @@ _PUBLIC_PATHS: frozenset[str] = frozenset(
 #: ``/reset/`` carries a single-use token tied to the current password hash --
 #: see app/services/password_reset.py. Someone who has forgotten their password
 #: obviously cannot sign in to use it.
-_PUBLIC_PREFIXES: tuple[str, ...] = ("/static/", "/a/", "/reset/")
+#: ``/verify/`` likewise: a new account clicks it before it can sign in.
+_PUBLIC_PREFIXES: tuple[str, ...] = ("/static/", "/a/", "/reset/", "/verify/")
 
 
 def _is_public(path: str) -> bool:

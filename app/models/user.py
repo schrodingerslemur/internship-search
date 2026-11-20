@@ -50,6 +50,9 @@ class User(Base, TimestampMixin):
     #: Where this user's digests go. Falls back to ``email`` when unset.
     digest_email: Mapped[str | None] = mapped_column(String(320))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
+    #: When the account proved it owns ``email`` by clicking the link sent
+    #: there. Null: it cannot sign in yet (see app/services/email_verify.py).
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     preference: Mapped[UserPreference | None] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"

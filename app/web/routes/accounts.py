@@ -71,8 +71,65 @@ async def login(
             },
             status_code=401,
         )
+    if user.email_verified_at is None:
+        db.commit()
+        sent = await _send_verification(request, user)
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {
+                "mode": "login",
+                "any_accounts": True,
+                "email": email,
+                "error": (
+                    f"Confirm your email first. We just sent a new link to {user.email}."
+                    if sent
+                    else "Confirm your email first. We couldn't send a new link just now; try again later."
+                ),
+            },
+            status_code=403,
+        )
     db.commit()
     return _redirect_with_session(user, _signing_key(request))
+
+
+async def _send_verification(request: Request, user) -> bool:
+    """Email ``user`` a link that verifies their address. True if it went out."""
+    from app.notify.base import NotificationMessage
+    from app.notify.providers import EmailProvider
+    from app.services import email_verify
+
+    if not get_settings().smtp_configured:
+        return False
+    base = str(request.base_url).rstrip("/")
+    link = f"{base}/verify/{email_verify.issue(user, _signing_key(request))}"
+    subject, text, html = email_verify.build_email(user, link)
+    result = await EmailProvider(user.email).send(NotificationMessage(text=text, subject=subject, html=html))
+    log.info("auth.verification_sent", user_id=user.id, sent=result.ok)
+    return bool(result.ok)
+
+
+@router.get("/verify/{token}", include_in_schema=False)
+async def verify_email(token: str, request: Request, db: Session = Depends(get_db)):
+    from app.models.base import utcnow
+    from app.services import email_verify
+
+    user = email_verify.verify(db, token, _signing_key(request))
+    if user is None:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {
+                "mode": "login",
+                "any_accounts": True,
+                "error": "That link has expired or was already used. Sign in and we'll send a fresh one.",
+            },
+            status_code=400,
+        )
+    user.email_verified_at = utcnow()
+    db.commit()
+    log.info("auth.email_verified", user_id=user.id)
+    return _redirect_with_session(user, _signing_key(request), "/welcome")
 
 
 @router.get("/signup", response_class=HTMLResponse, include_in_schema=False)
@@ -134,6 +191,24 @@ async def signup(
     if "@" not in email_clean:
         return fail("That does not look like an email address.")
 
+    from app.services import email_verify
+
+    # Everyone but the first account (the owner) is a newcomer, and only
+    # newcomers are checked against the allowlist and asked to verify.
+    newcomer = auth.account_count(db) > 0 and auth.claimable_legacy_account(db) is None
+    if newcomer and not email_verify.email_allowed(email_clean):
+        return fail(
+            "This email isn't on the invite list. Ask whoever sent you the link to add it.",
+            status=403,
+        )
+    verify = newcomer and get_settings().signup_verify_email
+    if verify and not get_settings().smtp_configured:
+        return fail(
+            "New accounts confirm their email, but email isn't set up on this site yet. "
+            "Ask whoever sent you the link.",
+            status=503,
+        )
+
     problem = auth.password_problem(password)
     if problem:
         return fail(problem)
@@ -158,13 +233,32 @@ async def signup(
 
     # Everyone after the first account (the deployment's owner) starts with a
     # short setup: their documents, a few questions, a review.
-    newcomer = auth.account_count(db) > 0
-    user = auth.create_account(db, email=email_clean, password=password, name=name or None)
+    user = auth.create_account(
+        db, email=email_clean, password=password, name=name or None, verified=not verify
+    )
     if newcomer:
         from app.services import onboarding
 
         onboarding.begin(db, user)
     db.commit()
+    if verify:
+        # No session until the link is clicked: that is what proves the inbox.
+        sent = await _send_verification(request, user)
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {
+                "mode": "login",
+                "any_accounts": True,
+                "email": email_clean,
+                "notice": (
+                    f"Almost done: we sent a link to {email_clean}. Click it to finish signing up."
+                    if sent
+                    else "Your account was created, but the confirmation email didn't send. "
+                    "Sign in to get a new link."
+                ),
+            },
+        )
     return _redirect_with_session(user, _signing_key(request), "/welcome" if newcomer else "/")
 
 
@@ -272,6 +366,12 @@ async def reset(
     # Changing the hash re-derives the link-signing key, which retires this
     # link and every other outstanding one for the account.
     user.password_hash = auth.hash_password(password)
+    if user.email_verified_at is None:
+        # The reset link came to this inbox, which proves it as well as a
+        # verification link would.
+        from app.models.base import utcnow
+
+        user.email_verified_at = utcnow()
     db.flush()
     db.commit()
     log.info("auth.password_reset", user_id=user.id)

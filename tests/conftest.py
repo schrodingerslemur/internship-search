@@ -12,6 +12,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("LLM_ENABLED", "false")
 os.environ.setdefault("SCHEDULER_ENABLED", "false")
 os.environ.setdefault("HTTP_CACHE_TTL_SECONDS", "0")
+# Signup tests log straight in; tests/test_signup_gate.py turns this back on.
+os.environ.setdefault("SIGNUP_VERIFY_EMAIL", "false")
 
 from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402

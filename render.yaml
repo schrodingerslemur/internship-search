@@ -43,6 +43,18 @@ services:
       # (comma-separate several). Unset: anyone with the link can sign up.
       - key: SIGNUP_INVITE_CODE
         sync: false
+      # Only these emails may sign up (comma-separated; "@school.edu" allows a
+      # domain). Unset: anyone who gets past the invite code.
+      - key: SIGNUP_ALLOWED_EMAILS
+        sync: false
+      # New accounts confirm their email by link, so the site needs to send
+      # mail. Gmail: smtp.gmail.com, your address, and an app password.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
       # The GitHub Actions workflow owns the schedule. A second scheduler here
       # would send every digest twice.
       - key: SCHEDULER_ENABLED

@@ -420,7 +420,12 @@ accounts; a site that needs a sign-in, or one behind bot protection
 ### Other people's accounts: everyone brings their own model
 
 Set `SIGNUP_INVITE_CODE` on Render and only people you give the code to can
-sign up (the first account, yours, never needs it). A new account starts on
+sign up (the first account, yours, never needs it). Set `SIGNUP_ALLOWED_EMAILS`
+(`friend@gmail.com, @andrew.cmu.edu`) and only those addresses can. Every new
+account also confirms its email: signing up sends a link, and it can't sign in
+until that's clicked. That needs `SMTP_HOST`/`SMTP_USER`/`SMTP_PASSWORD` on the
+web service; without them, new signups are refused rather than let in
+unverified. A new account starts on
 **Welcome**: upload a resume and, optionally, a transcript; their model reads
 both and asks at most five short questions about what the documents can't say
 (roles, places, terms, companies, work authorization); then they review
