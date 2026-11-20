@@ -337,6 +337,12 @@ async def autoapply_approve(
             value = form.get("answer_" + key[len("label_"):])
             if isinstance(value, str):
                 answers[label] = value
+    from app.apply.answers import looks_like_placeholder
+
+    unfinished = [label for label, value in answers.items() if looks_like_placeholder(value)]
+    if unfinished:
+        message = "Not sent. These still read like placeholders, not answers: " + "; ".join(unfinished)[:300]
+        return RedirectResponse(f"/autoapply?bad=1&done={quote(message)}", 303)
     if cloud.approve(db, user, task, answers) is None:
         db.rollback()
         return RedirectResponse(f"/autoapply?bad=1&done={quote('This job has no application link any more')}", 303)

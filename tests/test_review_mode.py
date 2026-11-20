@@ -215,3 +215,69 @@ def test_the_welcome_form_rows_become_the_profile(session, account):  # noqa: F8
     assert data["other_education"] == [{"school": "CMU", "degree": "Bachelor's", "discipline": "ECE",
                                         "graduation_year": 2026}]
     assert data["degree"] == "Master's"
+
+
+# ------------------------------------------------------------ placeholders
+
+
+@pytest.mark.parametrize("text", [
+    "Short first-person answer about why Reliable Robotics...",
+    "2-4 plain first-person sentences tying resume items to the posting",
+    "[Company name]",
+    "Because...",
+    "TBD",
+])
+def test_placeholders_are_caught(text):
+    from app.apply.answers import looks_like_placeholder
+
+    assert looks_like_placeholder(text)
+
+
+@pytest.mark.parametrize("text", [
+    "I want to build FPGA control systems for autonomous aircraft, which matches my RTL work at CMU.",
+    "Yes", "Pittsburgh, PA", "I led a 4-person team over 2 years.", "No, I do not require sponsorship.",
+])
+def test_real_answers_are_kept(text):
+    from app.apply.answers import looks_like_placeholder
+
+    assert not looks_like_placeholder(text)
+
+
+def test_a_placeholder_from_the_model_is_not_used():
+    class Lazy:
+        def answer_application_questions(self, **k):
+            return {"q1": {"answer": "Short first-person answer about why Acme...", "confident": True}}
+
+    q = Question(name="q1", label="Why Acme?", type="textarea", required=True, options=[])
+    [a] = prepare_answers([q], ApplicantProfile(), llm=Lazy())
+    assert not a.answered  # required, so it comes back to the candidate
+
+
+def test_the_agent_refuses_to_type_a_placeholder():
+    from app.apply.agent import WebAgent
+
+    class Page:
+        def set_default_timeout(self, *_):
+            pass
+
+    agent = WebAgent(Page(), lambda *a: None, briefing="", files={})
+    agent._locate = lambda _id: pytest.fail("must not touch the page")
+    out = agent.act({"do": "fill", "id": "e1", "value": "Short first-person answer..."})
+    assert out.startswith("error: not entered")
+
+
+def test_approve_refuses_placeholders(session, account):  # noqa: F811
+    app = create_app()
+    app.dependency_overrides[get_db] = lambda: session
+    task = _queue(session, account)
+    task.status = REVIEW
+    task.answers = [{"label": "Why Acme?", "value": "Short first-person answer...", "source": "agent", "type": "textarea"}]
+    session.commit()
+    with TestClient(app, follow_redirects=False) as c:
+        c.post("/login", data={"email": "me@example.com", "password": "a-good-password"})
+        assert "reads like a placeholder" in c.get("/autoapply").text
+        r = c.post(f"/autoapply/task/{task.id}/approve",
+                   data={"label_1": "Why Acme?", "answer_1": "Short first-person answer..."})
+        assert "bad=1" in r.headers["location"]
+        session.refresh(task)
+        assert task.status == REVIEW and not task.approved

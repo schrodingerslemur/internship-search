@@ -118,6 +118,34 @@ class Draft:
         return cls(**data, answers=answers)
 
 
+# ----------------------------------------------------- not really answers
+
+#: Text a model sometimes writes in place of an answer: a description of the
+#: answer ("Short first-person answer..."), a template slot ("[Company]"), or
+#: filler. Entered into a form, it would go out in the applicant's name.
+_PLACEHOLDER = re.compile(
+    r"first[- ]person (?:answer|sentence|response)"
+    r"|\b(?:your|my|the) (?:answer|response) (?:here|goes)"
+    r"|\banswer here\b|\binsert\b.{0,40}\bhere\b|\bplaceholder\b|lorem ipsum"
+    r"|\b(?:tbd|todo)\b"
+    r"|\[[^\]\n]{2,40}\]|<[^>\n]{2,40}>|\{[^}\n]{2,40}\}"
+    r"|\b\d\s*(?:-|–|to)\s*\d\s+(?:plain\s+)?(?:first-person\s+)?sentences?\b"
+    r"|\bsentences? tying\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_placeholder(value) -> bool:
+    """Whether ``value`` reads like an instruction or a template, not an answer."""
+    text = " ".join(str(value or "").split())
+    if not text:
+        return False
+    if _PLACEHOLDER.search(text):
+        return True
+    # "Because I..." trailing off: a short answer that ends in an ellipsis.
+    return len(text) < 160 and text.endswith(("...", "…"))
+
+
 # ---------------------------------------------------------------- options
 
 
@@ -447,6 +475,9 @@ def _ask_model(
             value = [o for o in (loose_option(a.options, str(x or "")) for x in picks) if o] or None
         else:
             value = str(raw or "").strip() or None
+            if value and looks_like_placeholder(value):
+                # Left unanswered: a required one comes back to the candidate.
+                value = None
         if value:
             a.value, a.source = value, "ai"
 

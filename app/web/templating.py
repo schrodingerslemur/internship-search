@@ -220,3 +220,12 @@ def agent_can_apply(job) -> bool:
 
 
 templates.env.globals["agent_can_apply"] = agent_can_apply
+
+
+def _placeholderish(value) -> bool:
+    from app.apply.answers import looks_like_placeholder
+
+    return looks_like_placeholder(value)
+
+
+templates.env.tests["placeholder"] = _placeholderish

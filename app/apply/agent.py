@@ -27,6 +27,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.apply.answers import looks_like_placeholder
 from app.logging_setup import get_logger
 
 log = get_logger("autoapply.agent")
@@ -317,6 +318,12 @@ class WebAgent:
                     return "error: goto needs an absolute URL"
                 page.goto(url, wait_until="domcontentloaded")
                 return "ok"
+            if do in ("fill", "type") and looks_like_placeholder(action.get("value")):
+                return (
+                    "error: not entered -- that reads like an instruction or placeholder, not an "
+                    "answer. Write the real answer from the facts, or if a fact is missing put the "
+                    "question in \"questions\" for the candidate."
+                )
             el = self._locate(str(action.get("id") or ""))
             if el.count() == 0:
                 return "error: element no longer on the page"
@@ -431,7 +438,7 @@ class WebAgent:
             silent = 0
             last = reply
             for item in reply.get("filled") or []:
-                if isinstance(item, dict) and item.get("label"):
+                if isinstance(item, dict) and item.get("label") and not looks_like_placeholder(item.get("value")):
                     self.filled[str(item["label"])[:200]] = str(item.get("value"))[:500]
             status = str(reply.get("status") or "continue")
             results = []
