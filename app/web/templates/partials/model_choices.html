@@ -7,11 +7,13 @@
     <span class="links">
       {% if p.key_url %}<a href="{{ p.key_url }}" target="_blank" rel="noopener">Get a key →</a>{% endif %}
       {% for name, url in p.more_key_urls %}<a href="{{ url }}" target="_blank" rel="noopener">{{ name }} keys →</a>{% endfor %}
-      <a class="btn sm" href="/model?provider={{ p.key }}&next=/welcome">Connect</a>
+      <a class="btn sm" href="/model?provider={{ p.key }}&next=/welcome" target="_blank" rel="noopener">Connect</a>
     </span>
   </li>
   {% endfor %}
 </ul>
+<div class="help" style="margin-top:6px">Connect opens in a new tab, so what you've chosen here stays put.
+  Once it says it's connected, come back here and press Continue.</div>
 <style>
   .model-choices{list-style:none;padding:0;margin:10px 0 0;display:grid;gap:8px}
   .model-choices li{display:flex;flex-direction:column;gap:2px}

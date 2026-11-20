@@ -31,19 +31,38 @@ def extract_text(path: Path) -> str:
     still stored, and the user can paste text manually.
     """
     suffix = path.suffix.lower()
+    text = ""
     try:
         if suffix in (".txt", ".md"):
-            return path.read_text(encoding="utf-8", errors="ignore")
-        if suffix == ".pdf":
-            return _extract_pdf(path)
-        if suffix == ".docx":
-            return _extract_docx(path)
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        elif suffix == ".pdf":
+            text = _extract_pdf(path)
+        elif suffix == ".docx":
+            text = _extract_docx(path)
     except Exception as exc:  # pragma: no cover - optional parsers
         log.warning("resume.extract_failed", file=path.name, error=str(exc)[:200])
-    return ""
+    # Postgres text columns reject NUL outright (a DataError on save), and PDF
+    # text often carries them.
+    return text.replace("\x00", "")
 
 
 def _extract_pdf(path: Path) -> str:
+    try:
+        from pypdf import PdfReader
+    except ImportError:  # pragma: no cover - pypdf is a core dependency
+        return _extract_pdf_raw(path)
+    try:
+        pages = PdfReader(str(path)).pages
+        text = " ".join(page.extract_text() or "" for page in pages)
+    except Exception as exc:
+        log.warning("resume.pdf_unreadable", file=path.name, error=str(exc)[:200])
+        return _extract_pdf_raw(path)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_pdf_raw(path: Path) -> str:
+    """Last resort: text from uncompressed content streams only. Most PDFs
+    (Google Docs, Word) compress theirs, so this rarely finds much."""
     raw = path.read_bytes()
     # Pull text from uncompressed content streams without a heavy dependency.
     chunks = re.findall(rb"\((?:\\.|[^\\()])*\)", raw)

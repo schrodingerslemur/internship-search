@@ -65,8 +65,6 @@ def model_save(
         return _page(request, db, user, status=400, error=str(exc), picked=provider, next_page=next_page)
     ok, _ = user_llm.check(db, row)
     db.commit()
-    if ok and next_page:
-        return RedirectResponse(next_page, status_code=303)
     suffix = f"&next={next_page}" if next_page else ""
     return RedirectResponse("/model?notice=" + ("works" if ok else "failed") + suffix, status_code=303)
 

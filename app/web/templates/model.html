@@ -10,7 +10,8 @@
 <h1>Your model</h1>
 <div class="sub">The AI that answers application questions and fills forms for you, on your own key.</div>
 
-{% if notice == "works" %}<div class="flash ok">Connected: {{ saved.check_detail }}.</div>{% endif %}
+{% if notice == "works" %}<div class="flash ok">Connected: {{ saved.check_detail }}.
+  {% if next_page == "/welcome" %}Go back to your Welcome tab and press Continue, or <a href="/welcome">continue here</a>.{% endif %}</div>{% endif %}
 {% if notice == "failed" and saved %}<div class="flash bad">Saved, but the test call failed: {{ saved.check_detail }}</div>{% endif %}
 {% if notice == "removed" %}<div class="flash ok">Removed. Nothing is stored for you any more.</div>{% endif %}
 {% if error %}<div class="flash bad">{{ error }}</div>{% endif %}

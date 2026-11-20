@@ -150,3 +150,12 @@ class TestVerification:
         token = password_reset.issue(user, client.app.state.signing_key)
         assert client.post(f"/reset/{token}", data={"password": "brand-new-pass"}).status_code == 303
         assert user.email_verified_at is not None
+
+
+def test_extracted_text_never_carries_nul(tmp_path):
+    """Postgres rejects NUL in text columns; it broke the Welcome upload."""
+    from app.services.resumes import extract_text
+
+    f = tmp_path / "resume.txt"
+    f.write_bytes(b"Ada\x00 Example\x00")
+    assert extract_text(f) == "Ada Example"
