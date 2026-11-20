@@ -43,6 +43,7 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
 {% set rest = tasks|rejectattr('status', 'in', ['needs_you', 'waiting_code'])|list %}
 
 <div class="aa">
+{% include "partials/applications_nav.html" %}
   <h1>Auto-apply</h1>
   <div class="sub"><a href="/swipe">← Back to swiping</a></div>
 

@@ -81,6 +81,7 @@ def _page(request: Request, db: Session, user: User, state, *, status: int = 200
         {
             "state": state,
             "has_model": has_model,
+            "providers": [p for p in user_llm.PROVIDERS.values()],
             "sections": SECTIONS,
             "kinds": onboarding.FIELDS,
             "max_questions": onboarding.MAX_QUESTIONS,

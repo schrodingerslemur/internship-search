@@ -33,6 +33,8 @@ class Provider:
     #: Good enough for the general web agent (Lever, Workday, ...), which runs
     #: up to thirty long turns per application.
     strong_agent: bool = False
+    #: (name, url) for providers whose keys are made in several places.
+    more_key_urls: tuple[tuple[str, str], ...] = ()
 
 
 PROVIDERS: dict[str, Provider] = {
@@ -72,6 +74,11 @@ PROVIDERS: dict[str, Provider] = {
             "",
             "OpenAI, OpenRouter, Together or anything that speaks the OpenAI chat API: "
             "give its base URL and model.",
+            more_key_urls=(
+                ("OpenAI", "https://platform.openai.com/api-keys"),
+                ("OpenRouter", "https://openrouter.ai/settings/keys"),
+                ("Together", "https://api.together.ai/settings/api-keys"),
+            ),
         ),
     )
 }

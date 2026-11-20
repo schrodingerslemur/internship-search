@@ -16,6 +16,7 @@
 
 {% block content %}
 <h1 class="visually-hidden-ish">{{ meta.title }}</h1>
+{% if active_view in ('saved', 'applied') %}{% include "partials/applications_nav.html" %}{% endif %}
 
 {# ------------------------------------------------------------------ overview
    The first thing on the page answers "what should I do next?" -- a count, why
@@ -41,6 +42,8 @@
         Scheduled searches are off &mdash; <a href="/settings">turn them on</a>
       {% endif %}
     </span>
+    {% if active_view == 'review' %}<span><a href="/dismissed">Dismissed jobs</a></span>{% endif %}
+    {% if active_view == 'dismissed' %}<span><a href="/">Back to review</a></span>{% endif %}
   </div>
 </section>
 

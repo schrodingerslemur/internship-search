@@ -122,6 +122,12 @@ def swipe_decide(
     return JSONResponse({"ok": True})
 
 
+def _nav_counts(db: Session, user: User) -> dict:
+    from app.services import jobs_query as q
+
+    return q.dashboard_counts(db, user)
+
+
 @router.get("/autoapply", response_class=HTMLResponse)
 def autoapply_page(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)):
     record = cloud.get_record(db, user)
@@ -132,6 +138,7 @@ def autoapply_page(request: Request, db: Session = Depends(get_db), user: User =
         "autoapply.html",
         {
             "tasks": cloud.tasks_for(db, user),
+            "counts": _nav_counts(db, user),
             "labels": cloud.STATUS_LABELS,
             "record": record,
             "problems": cloud.readiness(record),

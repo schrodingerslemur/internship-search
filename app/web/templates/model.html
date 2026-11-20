@@ -47,6 +47,7 @@ and jobs on Lever, Workday or company sites can't be applied to for you.</div>
 
 {% set current = picked or (saved.provider if saved else "groq") %}
 <form method="post" action="/model" class="panel setting-group" id="model-form">
+  {% if next_page %}<input type="hidden" name="next" value="{{ next_page }}">{% endif %}
   <div class="setting">
     <label>Provider</label>
     <div class="ctl">
@@ -54,7 +55,9 @@ and jobs on Lever, Workday or company sites can't be applied to for you.</div>
       <label class="provider-choice">
         <input type="radio" name="provider" value="{{ p.key }}" {% if p.key == current %}checked{% endif %}
                data-model="{{ p.default_model }}" data-url="{{ p.key_url }}" data-strong="{{ 1 if p.strong_agent else 0 }}">
-        <span><strong>{{ p.name }}</strong><br><span class="help" style="margin:0">{{ p.blurb }}</span></span>
+        <span><strong>{{ p.name }}</strong><br><span class="help" style="margin:0">{{ p.blurb }}
+          {% if p.key_url %}<a href="{{ p.key_url }}" target="_blank" rel="noopener">Get a key →</a>{% endif %}
+          {% for name, url in p.more_key_urls %}<a href="{{ url }}" target="_blank" rel="noopener">{{ name }} keys →</a>{% if not loop.last %} · {% endif %}{% endfor %}</span></span>
       </label>
       {% endfor %}
     </div>

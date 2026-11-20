@@ -1,0 +1,20 @@
+{# Sub-tabs under Applications: every stage of an application in one place.
+   `nav-applied-count` is updated live after each action (partials/action_result.html). #}
+{% set nc = counts|default({}, true) %}
+{% set here = request.url.path %}
+<nav class="subtabs" aria-label="Applications">
+  <a href="/saved" {% if here == '/saved' %}class="on" aria-current="page"{% endif %}>Saved</a>
+  <a href="/applied" {% if here == '/applied' %}class="on" aria-current="page"{% endif %}>Applied<span
+     id="nav-applied-count">{% with n = nc.applied, n_label = 'applied' %}{% include "partials/nav_count.html" %}{% endwith %}</span></a>
+  <a href="/tracker" {% if here == '/tracker' %}class="on" aria-current="page"{% endif %}>Tracker</a>
+  <a href="/autoapply" {% if here == '/autoapply' %}class="on" aria-current="page"{% endif %}>Agent</a>
+</nav>
+<style>
+  .subtabs{display:flex;gap:4px;flex-wrap:wrap;margin:0 0 16px;padding:3px;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;width:fit-content;max-width:100%}
+  .subtabs a{padding:6px 12px;border-radius:7px;color:var(--muted);font-size:13.5px}
+  .subtabs a:hover{color:var(--text);text-decoration:none}
+  .subtabs a.on{background:var(--bg);color:var(--text);font-weight:600}
+  .subtabs .count{display:inline-block;margin-left:6px;background:var(--accent);color:#fff;
+    border-radius:999px;padding:0 6px;font-size:11px;line-height:16px}
+</style>

@@ -35,9 +35,10 @@
     <label></label>
     <div class="ctl">
       {% if not has_model %}
-      <div class="note">You haven't connected a model, so there's no chat: you'll fill in a short form instead.
-        <a href="/model">Connect one</a> (Groq is free and takes a minute) for the chat, and for answers on
-        application forms.</div>
+      <div class="note">You haven't connected an AI model, so there's no chat: you'll fill in a short form instead.
+        Connect one for the chat and for answers on application forms. Make a key on the provider's site,
+        then connect it here:
+        {% include "partials/model_choices.html" %}</div>
       {% endif %}
       <button class="btn primary" type="submit">Continue</button>
     </div>
@@ -65,7 +66,8 @@
   {% endif %}
 </form>
 {% else %}
-<div class="note">No model is connected. <a href="/model">Connect one</a>, or go on to the form.</div>
+<div class="note">No AI model is connected. Connect one, or go on to the form.
+  {% include "partials/model_choices.html" %}</div>
 {% endif %}
 <form method="post" action="/welcome/review" style="margin-top:12px">
   <button class="btn sm" type="submit">Skip to the review</button>

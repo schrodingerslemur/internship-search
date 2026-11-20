@@ -1,0 +1,20 @@
+{# Each provider with where to make a key and a link to connect it, returning to /welcome. #}
+<ul class="model-choices">
+  {% for p in providers %}
+  <li>
+    <strong>{{ p.name }}</strong>
+    <span class="help">{{ p.blurb }}</span>
+    <span class="links">
+      {% if p.key_url %}<a href="{{ p.key_url }}" target="_blank" rel="noopener">Get a key →</a>{% endif %}
+      {% for name, url in p.more_key_urls %}<a href="{{ url }}" target="_blank" rel="noopener">{{ name }} keys →</a>{% endfor %}
+      <a class="btn sm" href="/model?provider={{ p.key }}&next=/welcome">Connect</a>
+    </span>
+  </li>
+  {% endfor %}
+</ul>
+<style>
+  .model-choices{list-style:none;padding:0;margin:10px 0 0;display:grid;gap:8px}
+  .model-choices li{display:flex;flex-direction:column;gap:2px}
+  .model-choices .help{margin:0}
+  .model-choices .links{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:2px}
+</style>

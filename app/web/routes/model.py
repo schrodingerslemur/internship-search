@@ -31,9 +31,17 @@ def _page(request: Request, db: Session, user: User, *, status: int = 200, **ext
     )
 
 
+#: Pages that may send someone here and get them back after saving. A fixed
+#: list, so ?next= can never become an open redirect.
+RETURN_TO = {"/welcome"}
+
+
 @router.get("/model", response_class=HTMLResponse)
 def model_page(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    return _page(request, db, user, notice=request.query_params.get("notice"))
+    params = request.query_params
+    picked = params.get("provider") if params.get("provider") in user_llm.PROVIDERS else None
+    next_page = params.get("next") if params.get("next") in RETURN_TO else None
+    return _page(request, db, user, notice=params.get("notice"), picked=picked, next_page=next_page)
 
 
 @router.post("/model", response_class=HTMLResponse)
@@ -43,19 +51,24 @@ def model_save(
     api_key: str = Form(""),
     model: str = Form(""),
     base_url: str = Form(""),
+    next_page: str = Form("", alias="next"),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
+    next_page = next_page if next_page in RETURN_TO else ""
     try:
         row = user_llm.save(
             db, user, provider=provider, api_key=api_key, model=model, base_url=base_url
         )
     except user_llm.SetupError as exc:
         db.rollback()
-        return _page(request, db, user, status=400, error=str(exc), picked=provider)
+        return _page(request, db, user, status=400, error=str(exc), picked=provider, next_page=next_page)
     ok, _ = user_llm.check(db, row)
     db.commit()
-    return RedirectResponse("/model?notice=" + ("works" if ok else "failed"), status_code=303)
+    if ok and next_page:
+        return RedirectResponse(next_page, status_code=303)
+    suffix = f"&next={next_page}" if next_page else ""
+    return RedirectResponse("/model?notice=" + ("works" if ok else "failed") + suffix, status_code=303)
 
 
 @router.post("/model/test")
