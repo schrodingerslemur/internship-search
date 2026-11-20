@@ -1,0 +1,29 @@
+{# Send right away, or check each application first (User.review_applications).
+   Set `back` to the page to return to. #}
+<form class="send-mode {{ 'checking' if review_mode else 'sending' }}" method="post" action="/autoapply/review-mode">
+  <input type="hidden" name="next" value="{{ back }}">
+  <div class="sm-text">
+    <strong>{{ 'You check each application before it’s sent' if review_mode else 'Applications are sent automatically' }}</strong>
+    <span>{{ 'The agent fills the form, then waits for you on Applications → Agent.' if review_mode
+             else 'The agent fills the form and submits it straight away.' }}</span>
+  </div>
+  <div class="sm-switch" role="group" aria-label="When the agent fills a form">
+    <button type="submit" name="on" value="0" class="{{ '' if review_mode else 'on' }}"
+            {% if not review_mode %}aria-pressed="true"{% endif %}>Send automatically</button>
+    <button type="submit" name="on" value="1" class="{{ 'on' if review_mode else '' }}"
+            {% if review_mode %}aria-pressed="true"{% endif %}>Let me check first</button>
+  </div>
+</form>
+<style>
+  .send-mode{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;justify-content:space-between;
+    margin:12px 0;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--panel)}
+  .send-mode.sending{border-left:4px solid var(--ok)}
+  .send-mode.checking{border-left:4px solid var(--warn)}
+  .send-mode .sm-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 220px}
+  .send-mode .sm-text strong{font-size:14px}
+  .send-mode .sm-text span{font-size:12.5px;color:var(--muted)}
+  .send-mode .sm-switch{display:flex;padding:3px;gap:3px;border-radius:999px;background:var(--bg);border:1px solid var(--line)}
+  .send-mode .sm-switch button{border:0;background:none;color:var(--muted);border-radius:999px;padding:6px 12px;
+    font-size:13px;cursor:pointer;white-space:nowrap}
+  .send-mode .sm-switch button.on{background:var(--accent);color:#fff;font-weight:600}
+</style>

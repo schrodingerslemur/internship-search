@@ -94,7 +94,7 @@
         <input type="hidden" name="view" value="{{ vw }}">
         <input type="hidden" name="surface" value="{{ sf }}">
         <input type="hidden" name="redirect_to" value="{{ back }}">
-        <button class="btn sm" type="submit" title="The agent fills and submits the application for you">Apply for me</button>
+        <button class="btn sm" type="submit" title="{{ 'The agent fills the application, then waits for you to check it' if review_mode else 'The agent fills and submits the application for you' }}">Apply for me</button>
       </form>
     {% endif %}
 

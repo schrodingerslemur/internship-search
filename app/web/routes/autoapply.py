@@ -63,6 +63,7 @@ def swipe_page(request: Request, db: Session = Depends(get_db), user: User = Dep
             "cards": cloud.deck(db, user, limit=10),
             "ready": not cloud.readiness(cloud.get_record(db, user)),
             "summary": _summary(db, user),
+            "review_mode": bool(user.review_applications),
         },
     )
 
@@ -301,11 +302,17 @@ async def autoapply_answers(
 
 @router.post("/autoapply/review-mode")
 def autoapply_review_mode(
-    on: str = Form("0"), db: Session = Depends(get_db), user: User = Depends(current_user)
+    on: str = Form("0"),
+    next_page: str = Form("/autoapply", alias="next"),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     """Send applications right away, or stop each one for the user to check."""
     user.review_applications = on == "1"
     db.commit()
+    # The switch sits on several pages; go back to the one it was pressed on.
+    if next_page in ("/swipe", "/", "/saved"):
+        return RedirectResponse(next_page, 303)
     text = ("You'll check each application before it's sent" if user.review_applications
             else "Applications are sent as soon as they're filled in")
     return RedirectResponse(f"/autoapply?done={quote(text)}", 303)

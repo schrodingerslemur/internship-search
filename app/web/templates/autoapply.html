@@ -57,13 +57,7 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
   <h1>Auto-apply</h1>
   <div class="sub"><a href="/swipe">← Back to swiping</a></div>
 
-  <form class="mode" method="post" action="/autoapply/review-mode" aria-label="When a form is filled in">
-    <span class="mode-q">When the agent fills in a form:</span>
-    <button class="{{ '' if review_mode else 'on' }}" type="submit" name="on" value="0"
-            {% if not review_mode %}aria-pressed="true"{% endif %}>Send it right away</button>
-    <button class="{{ 'on' if review_mode else '' }}" type="submit" name="on" value="1"
-            {% if review_mode %}aria-pressed="true"{% endif %}>Let me check it first</button>
-  </form>
+  {% with back = "/autoapply" %}{% include "partials/send_mode.html" %}{% endwith %}
 
   {% if checks %}
   <h2>Ready for you to check ({{ checks|length }})</h2>

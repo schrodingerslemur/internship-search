@@ -144,7 +144,7 @@ class TestPages:
             yield c
 
     def test_the_switch_and_the_draft_form(self, client, session, account):  # noqa: F811
-        assert "Send it right away" in client.get("/autoapply").text
+        assert "Send automatically" in client.get("/autoapply").text
         client.post("/autoapply/review-mode", data={"on": "1"})
         session.refresh(account)
         assert account.review_applications is True
@@ -163,6 +163,18 @@ class TestPages:
         assert r.status_code == 303
         session.refresh(task)
         assert task.status == QUEUED and task.approved and task.overrides == {"Why Acme?": "Edited."}
+
+    @pytest.mark.parametrize("path", ["/swipe", "/", "/saved"])
+    def test_the_switch_is_on_swipe_and_review_and_comes_back(self, client, session, account, path):  # noqa: F811
+        page = client.get(path).text
+        assert "Applications are sent automatically" in page and "Let me check first" in page
+        r = client.post("/autoapply/review-mode", data={"on": "1", "next": path})
+        assert r.headers["location"] == path
+        assert "You check each application before it" in client.get(path).text
+
+    def test_the_switch_never_redirects_off_site(self, client):
+        r = client.post("/autoapply/review-mode", data={"on": "0", "next": "https://evil.example"})
+        assert r.headers["location"].startswith("/autoapply")
 
     def test_feedback_needs_words_and_a_waiting_draft(self, client, session, account):  # noqa: F811
         task = _queue(session, account)

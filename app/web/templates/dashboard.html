@@ -17,6 +17,9 @@
 {% block content %}
 <h1 class="visually-hidden-ish">{{ meta.title }}</h1>
 {% if active_view in ('saved', 'applied') %}{% include "partials/applications_nav.html" %}{% endif %}
+{% if active_view in ('review', 'saved') %}
+  {% with back = "/" if active_view == "review" else "/saved" %}{% include "partials/send_mode.html" %}{% endwith %}
+{% endif %}
 
 {# ------------------------------------------------------------------ overview
    The first thing on the page answers "what should I do next?" -- a count, why

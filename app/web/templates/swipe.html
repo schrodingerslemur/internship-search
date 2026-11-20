@@ -10,7 +10,7 @@
 .sw-stat .needs{color:#fff;background:var(--bad);border-radius:20px;padding:2px 9px;font-weight:600}
 .sw-setup{display:block;margin-top:10px;font-size:13px;padding:9px 12px;border-radius:10px;
  border:1px solid var(--warn);background:color-mix(in srgb,var(--warn) 10%,var(--panel));color:var(--text)}
-.deck{position:relative;height:clamp(360px,calc(100dvh - 260px),470px);margin:14px 0 18px;touch-action:pan-y}
+.deck{position:relative;height:clamp(340px,calc(100dvh - 330px),470px);margin:14px 0 18px;touch-action:pan-y}
 .card{position:absolute;inset:0;background:var(--panel);border:1px solid var(--line);border-radius:18px;
  padding:18px;display:flex;flex-direction:column;gap:10px;overflow:hidden;user-select:none;-webkit-user-select:none;
  box-shadow:0 8px 24px rgba(0,0,0,.18);transform-origin:50% 100%;
@@ -85,6 +85,7 @@
   {% if not ready %}
     <a class="sw-setup" href="/autoapply#profile">Add your details and resume so the agent can apply →</a>
   {% endif %}
+  {% with back = "/swipe" %}{% include "partials/send_mode.html" %}{% endwith %}
 
   <div class="deck" id="deck"></div>
 

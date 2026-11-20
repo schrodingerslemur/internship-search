@@ -45,6 +45,7 @@ def _job_page_context(request: Request, db: Session, user: User, view_name: str)
 
     return {
         "active_view": view_name,
+        "review_mode": bool(user.review_applications),
         "counts": q.dashboard_counts(db, user),
         "page": page,
         "view": user_jobs.view_for(db, user, page.jobs),
