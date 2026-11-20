@@ -38,6 +38,7 @@ from app.models.autoapply import (
     NEEDS_YOU,
     OPEN_STATUSES,
     QUEUED,
+    REVIEW,
     RUNNING,
     SUBMITTED,
     WAITING_CODE,
@@ -334,10 +335,33 @@ def enqueue(session: Session, user: User, job: Job) -> ApplyTask | None:
     task.form_key, task.apply_url = key, url
     task.status, task.detail, task.queued_at = QUEUED, None, now
     task.finished_at = None
+    # A fresh go starts unapproved; approve() and redraft() set these after.
+    task.approved, task.overrides, task.feedback = False, {}, None
     # Saved, not applied: the tracker says applied only once a form went in.
     user_jobs.set_status(session, user, job, JobStatus.SAVED.value, now=now)
     session.flush()
     return task
+
+
+def approve(session: Session, user: User, task: ApplyTask, answers: dict[str, str]) -> ApplyTask | None:
+    """The user checked the draft (perhaps editing it): queue it to be sent as is."""
+    job = lean_job(session, task.job_id)
+    queued = enqueue(session, user, job) if job is not None else None
+    if queued is not None:
+        queued.overrides = {k: v for k, v in answers.items() if k.strip()}
+        queued.approved = True
+        session.flush()
+    return queued
+
+
+def redraft(session: Session, user: User, task: ApplyTask, feedback: str) -> ApplyTask | None:
+    """Send the draft back to the agent with the user's feedback; it comes back to check."""
+    job = lean_job(session, task.job_id)
+    queued = enqueue(session, user, job) if job is not None else None
+    if queued is not None:
+        queued.feedback = feedback.strip()[:2000]
+        session.flush()
+    return queued
 
 
 def cancel(session: Session, user: User, job: Job) -> bool:
@@ -560,6 +584,10 @@ def clean_profile_data(raw: dict) -> dict:
     data = {k: v for k, v in raw.items() if k in known}
     standing = data.get("standing_answers") or []
     data["standing_answers"] = [asdict(StandingAnswer(**s)) for s in standing]
+    if "other_education" in data:
+        from app.apply.profile import clean_education
+
+        data["other_education"] = clean_education(data["other_education"])
     ApplicantProfile(**{**data, "standing_answers": []})  # type check by construction
     return data
 
@@ -739,4 +767,5 @@ STATUS_LABELS = {
     FAILED: ("Couldn't apply", "dim"),
     CANCELLED: ("Cancelled", "dim"),
     WAITING_CODE: ("Code needed", "bad"),
+    REVIEW: ("Ready to check", "warn"),
 }

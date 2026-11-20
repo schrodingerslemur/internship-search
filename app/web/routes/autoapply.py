@@ -139,6 +139,7 @@ def autoapply_page(request: Request, db: Session = Depends(get_db), user: User =
         {
             "tasks": cloud.tasks_for(db, user),
             "counts": _nav_counts(db, user),
+            "review_mode": bool(user.review_applications),
             "labels": cloud.STATUS_LABELS,
             "record": record,
             "problems": cloud.readiness(record),
@@ -296,6 +297,67 @@ async def autoapply_answers(
     db.commit()
     background.add_task(_wake_worker)
     return RedirectResponse(f"/autoapply?done={quote('Saved. Applying again')}", 303)
+
+
+@router.post("/autoapply/review-mode")
+def autoapply_review_mode(
+    on: str = Form("0"), db: Session = Depends(get_db), user: User = Depends(current_user)
+):
+    """Send applications right away, or stop each one for the user to check."""
+    user.review_applications = on == "1"
+    db.commit()
+    text = ("You'll check each application before it's sent" if user.review_applications
+            else "Applications are sent as soon as they're filled in")
+    return RedirectResponse(f"/autoapply?done={quote(text)}", 303)
+
+
+@router.post("/autoapply/task/{task_id}/approve")
+async def autoapply_approve(
+    task_id: int,
+    request: Request,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Send a checked draft, with whatever the user changed in it."""
+    task = _own_task(db, user, task_id)
+    if task.status != cloud.REVIEW:
+        return RedirectResponse(f"/autoapply?bad=1&done={quote('That one is not waiting for you')}", 303)
+    form = await request.form()
+    answers = {}
+    for key, label in form.multi_items():
+        if key.startswith("label_") and isinstance(label, str):
+            value = form.get("answer_" + key[len("label_"):])
+            if isinstance(value, str):
+                answers[label] = value
+    if cloud.approve(db, user, task, answers) is None:
+        db.rollback()
+        return RedirectResponse(f"/autoapply?bad=1&done={quote('This job has no application link any more')}", 303)
+    db.commit()
+    background.add_task(_wake_worker)
+    return RedirectResponse(f"/autoapply?done={quote('Approved. Sending it now')}", 303)
+
+
+@router.post("/autoapply/task/{task_id}/feedback")
+def autoapply_feedback(
+    task_id: int,
+    background: BackgroundTasks,
+    feedback: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Ask the agent to redo the draft; it comes back to be checked again."""
+    task = _own_task(db, user, task_id)
+    if not feedback.strip():
+        return RedirectResponse(f"/autoapply?bad=1&done={quote('Say what to change first')}", 303)
+    if task.status != cloud.REVIEW:
+        return RedirectResponse(f"/autoapply?bad=1&done={quote('That one is not waiting for you')}", 303)
+    if cloud.redraft(db, user, task, feedback) is None:
+        db.rollback()
+        return RedirectResponse(f"/autoapply?bad=1&done={quote('This job has no application link any more')}", 303)
+    db.commit()
+    background.add_task(_wake_worker)
+    return RedirectResponse(f"/autoapply?done={quote('Sent back to the agent. It will be ready to check again soon')}", 303)
 
 
 @router.post("/autoapply/task/{task_id}/code")

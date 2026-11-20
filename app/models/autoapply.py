@@ -13,6 +13,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -38,6 +39,9 @@ CANCELLED = "cancelled"
 #: Submitted, and Greenhouse emailed a security code: the worker holds the
 #: form open while the user types the code into the dashboard.
 WAITING_CODE = "waiting_code"
+#: Filled in but not sent: the user asked to check every application first
+#: (``User.review_applications``). Approving it queues it again to submit.
+REVIEW = "review"
 
 OPEN_STATUSES = (QUEUED, RUNNING, WAITING_CODE)
 
@@ -68,6 +72,14 @@ class ApplyTask(Base, TimestampMixin):
     left_for_you: Mapped[list] = mapped_column(JSON, default=list)
     #: Exactly what was entered, so the user can see what went out in their name.
     answers: Mapped[list] = mapped_column(JSON, default=list)
+    #: The user's own answers, by question label, from checking a draft:
+    #: they win over everything else when the form is filled again.
+    overrides: Mapped[dict] = mapped_column(JSON, default=dict)
+    #: What the user told the agent to do differently on the next draft.
+    feedback: Mapped[str | None] = mapped_column(Text)
+    #: The user checked the answers and said send. Only then does a task of
+    #: someone who reviews applications get submitted.
+    approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     #: JPEG of the page when the worker finished with it.
     screenshot: Mapped[bytes | None] = mapped_column(LargeBinary)
 

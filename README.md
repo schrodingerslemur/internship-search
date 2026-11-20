@@ -379,7 +379,21 @@ python -m app.cli apply --job URL --check  # fill invisibly, screenshot, never s
 The **Swipe** tab shows one job at a time: the best undecided matches that have
 a Greenhouse form. Swipe right (→) and an agent in the cloud fills the form and
 submits it; swipe left (←) passes; **Z** undoes. Progress, what was sent, and a
-screenshot of every form are on **Auto-apply status** (account menu).
+screenshot of every form are on **Applications → Agent**.
+
+**Check before sending.** At the top of the Agent page, choose *Send it right
+away* or *Let me check it first*. With checking on, the agent fills the form
+but stops before Submit, and the application waits under **Ready for you to
+check** with every answer editable. **Approve and send** submits exactly what
+you left there (nothing is rewritten); **Give the agent feedback** drafts it
+again with your note and brings it back to check. On other sites the agent
+fills the form twice: once to draft, once to send what you approved.
+
+**More than one degree.** The profile's school, degree and major are the
+degree you're studying for now. Any other (a finished bachelor's during a
+master's) goes in `other_education`, set on Welcome or in the profile JSON. It's
+given to the model with your facts, and on Greenhouse forms whose Education
+block has *Add another*, each one gets its own row.
 
 ```
  dashboard (Render)                 Neon Postgres                 GitHub Actions

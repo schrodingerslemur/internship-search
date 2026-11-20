@@ -41,6 +41,8 @@ MESSAGE_CHARS = 1500
 
 # Every field of the draft and its type. The review form shows the same list.
 STR, LIST, INT, FLOAT, BOOL = "str", "list", "int", "float", "bool"
+#: A list of {"degree", "major", "school", "graduation_year"}.
+EDUCATION = "education"
 FIELDS: dict[str, str] = {
     # Who you are, for application forms.
     "first_name": STR,
@@ -58,6 +60,7 @@ FIELDS: dict[str, str] = {
     "graduation_year": INT,
     "gpa": FLOAT,
     "coursework": LIST,
+    "other_education": EDUCATION,
     # What you can do.
     "skills": LIST,
     "programming_languages": LIST,
@@ -164,6 +167,17 @@ def _clean(kind: str, value):
         return number if 0 <= number <= 10 else None
     if kind == BOOL:
         return _as_bool(value)
+    if kind == EDUCATION:
+        from app.apply.profile import clean_education
+
+        try:
+            cleaned = clean_education(value)
+        except ValueError:
+            return None
+        # The draft calls the field "major", like the current degree's.
+        return [
+            {("major" if k == "discipline" else k): v for k, v in d.items()} for d in cleaned
+        ]
     return None
 
 
@@ -190,7 +204,17 @@ def merge(draft: dict, updates) -> dict:
 def draft_from_form(form) -> dict:
     """The review form back into a draft; an emptied field is dropped."""
     draft: dict = {}
+    # Other degrees come as numbered rows: edu_degree_1, edu_school_1, ...
+    rows = sorted({k.rsplit("_", 1)[1] for k in form.keys() if k.startswith("edu_school_")}, key=int)
+    education = [
+        {f: form.get(f"edu_{f}_{n}") for f in ("degree", "major", "school", "graduation_year")}
+        for n in rows
+    ]
+    if education:
+        draft["other_education"] = _clean(EDUCATION, education) or []
     for name, kind in FIELDS.items():
+        if kind == EDUCATION:
+            continue
         raw = form.get(name)
         if raw is None:
             continue
@@ -318,6 +342,10 @@ Rules:
 - At most {MAX_QUESTIONS} questions in all. Set "done": true when you know
   enough or when told no questions are left; then "reply" is one sentence
   saying they can review everything next.
+- "school", "degree", "major" and the graduation fields are the degree they
+  are studying for now. Any other degree (say a finished bachelor's during a
+  master's) goes in "other_education" as a list of {{"degree", "major",
+  "school", "graduation_year"}}.
 - Suggest "roles" as concrete internship titles (e.g. "Embedded Software
   Intern") and "keywords" as the skills and topics a good posting would
   mention.
@@ -487,6 +515,7 @@ def finish(session: Session, user: User, state: OnboardingState, draft: dict) ->
         "school": draft.get("school"),
         "degree": draft.get("degree"),
         "discipline": draft.get("major"),
+        "other_education": draft.get("other_education"),
         "graduation_month": month,
         "graduation_year": year,
         "graduation": f"{_MONTHS[month - 1]} {year}" if month and year else (str(year) if year else None),

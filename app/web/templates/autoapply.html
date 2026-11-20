@@ -29,6 +29,15 @@ details.sent table{width:100%;border-collapse:collapse;margin-top:6px}
 details.sent td{border-top:1px solid var(--line);padding:5px 6px;vertical-align:top}
 details.sent td.src{color:var(--dim);font-size:11.5px;white-space:nowrap}
 details.prof{margin-top:28px}
+.mode{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:14px 0 4px}
+.mode-q{font-size:13px;color:var(--muted);margin-right:4px}
+.mode button{border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:999px;
+ padding:5px 12px;font-size:13px;cursor:pointer}
+.mode button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.need.check{border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
+.need.check .src{color:var(--dim);font-size:11.5px;font-weight:400;margin-left:4px}
+.need.check .fixed{font-size:13px;color:var(--muted);margin:4px 0}
+details.fb{margin-top:8px} details.fb summary{cursor:pointer;font-size:13px;color:var(--accent)}
 details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
 .prof textarea{width:100%;min-height:300px;margin-top:10px;font:12.5px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;
  background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px}
@@ -40,12 +49,69 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
 
 {% set codes = tasks|selectattr('status', 'equalto', 'waiting_code')|list %}
 {% set needs = tasks|selectattr('status', 'equalto', 'needs_you')|list %}
-{% set rest = tasks|rejectattr('status', 'in', ['needs_you', 'waiting_code'])|list %}
+{% set checks = tasks|selectattr('status', 'equalto', 'review')|list %}
+{% set rest = tasks|rejectattr('status', 'in', ['needs_you', 'waiting_code', 'review'])|list %}
 
 <div class="aa">
 {% include "partials/applications_nav.html" %}
   <h1>Auto-apply</h1>
   <div class="sub"><a href="/swipe">← Back to swiping</a></div>
+
+  <form class="mode" method="post" action="/autoapply/review-mode" aria-label="When a form is filled in">
+    <span class="mode-q">When the agent fills in a form:</span>
+    <button class="{{ '' if review_mode else 'on' }}" type="submit" name="on" value="0"
+            {% if not review_mode %}aria-pressed="true"{% endif %}>Send it right away</button>
+    <button class="{{ 'on' if review_mode else '' }}" type="submit" name="on" value="1"
+            {% if review_mode %}aria-pressed="true"{% endif %}>Let me check it first</button>
+  </form>
+
+  {% if checks %}
+  <h2>Ready for you to check ({{ checks|length }})</h2>
+  {% for t in checks %}
+  <div class="need check">
+    <div class="co">{{ t.job.company_name }}</div>
+    <div class="ti"><b>{{ t.job.title }}</b></div>
+    <div class="why">{{ t.detail }}{% if t.has_screenshot %} <a href="/autoapply/task/{{ t.id }}/screenshot" target="_blank">See the filled form</a>{% endif %}</div>
+    <form class="ask" method="post" action="/autoapply/task/{{ t.id }}/approve">
+      {% for a in t.answers or [] %}
+      {% set v = a.value|join(', ') if a.value is iterable and a.value is not string else (a.value if a.value is not none else '') %}
+      {% if a.type == 'file' %}
+      <div class="fixed"><span>{{ a.label }}</span> <b>{{ v }}</b> <span class="src">file</span></div>
+      {% else %}
+      <label>{{ a.label }} <span class="src">{{ {'ai':'AI-written','rule':'rule','standing':'your answer','profile':'profile','agent':'agent','you':'your edit'}.get(a.source, a.source) }}</span>
+        <input type="hidden" name="label_{{ loop.index }}" value="{{ a.label }}">
+        {% if a.options and a.type == 'select' %}
+        <select name="answer_{{ loop.index }}">
+          {% for o in a.options %}<option {% if o == v %}selected{% endif %}>{{ o }}</option>{% endfor %}</select>
+        {% elif a.type == 'textarea' or v|length > 90 %}
+        <textarea name="answer_{{ loop.index }}" rows="{{ [3, (v|length // 80) + 1]|max }}">{{ v }}</textarea>
+        {% else %}
+        <input type="text" name="answer_{{ loop.index }}" value="{{ v }}" autocomplete="off">
+        {% endif %}
+      </label>
+      {% endif %}
+      {% else %}
+      <p class="hint">The agent didn't list what it filled in. Check the screenshot.</p>
+      {% endfor %}
+      <button class="btn sm primary" type="submit">Approve and send</button>
+      <span class="hint">Your edits are used exactly as typed, for this application only.</span>
+    </form>
+    <details class="fb">
+      <summary>Give the agent feedback instead</summary>
+      <form class="ask" method="post" action="/autoapply/task/{{ t.id }}/feedback">
+        <textarea name="feedback" rows="3" required
+                  placeholder="e.g. Make the why-this-company answer shorter and mention my FPGA project."></textarea>
+        <button class="btn sm" type="submit">Redo with this feedback</button>
+        <span class="hint">It drafts again and comes back here for you to check.</span>
+      </form>
+    </details>
+    <div class="acts">
+      <a class="btn sm" href="{{ t.form_url }}" target="_blank" rel="noopener">Open the form</a>
+      <form method="post" action="/autoapply/task/{{ t.id }}/done"><button class="btn sm" type="submit">I applied myself</button></form>
+    </div>
+  </div>
+  {% endfor %}
+  {% endif %}
 
   {% for t in codes %}
   <div class="need code">

@@ -65,6 +65,9 @@ class ApplicantProfile:
     graduation_year: int | None = None
     #: First year of the current degree; four years before graduation if unset.
     education_start_year: int | None = None
+    #: Degrees besides the current one, e.g. a finished bachelor's during a
+    #: master's: [{"school", "degree", "discipline", "graduation_year"}].
+    other_education: list[dict] = field(default_factory=list)
 
     us_citizen: bool | None = None
     work_authorized_us: bool | None = None
@@ -115,6 +118,7 @@ class ApplicantProfile:
             f"School: {self.school}",
             f"Degree currently pursuing: {self.degree} in {self.discipline}",
             f"Expected graduation: {self.graduation}",
+            *(f"Other degree: {describe_degree(d)}" for d in self.other_education),
             f"US citizen: {yes_no[self.us_citizen]}",
             f"Legally authorized to work in the US: {yes_no[self.work_authorized_us]}",
             f"Will require visa sponsorship now or in future: {yes_no[self.requires_sponsorship]}",
@@ -135,6 +139,47 @@ class ApplicantProfile:
         if self.resume_file() is None:
             out.append(f"resume not found at {self.resume_path or '(unset)'}")
         return out
+
+
+EDUCATION_KEYS = ("school", "degree", "discipline", "graduation_year")
+
+
+def clean_education(raw) -> list[dict]:
+    """Other degrees as a list of {school, degree, discipline, graduation_year}.
+
+    Raises ValueError on a shape that isn't a list of objects, so a typo in the
+    profile JSON is reported rather than silently dropped.
+    """
+    if raw in (None, ""):
+        return []
+    if not isinstance(raw, list) or not all(isinstance(d, dict) for d in raw):
+        raise ValueError("other_education must be a list of objects")
+    out = []
+    for d in raw[:6]:
+        entry = {}
+        for key in EDUCATION_KEYS:
+            value = d.get(key)
+            if key == "discipline" and value in (None, ""):
+                value = d.get("major")  # what the Welcome form calls it
+            if key == "graduation_year":
+                try:
+                    year = int(str(value).strip()) if value not in (None, "") else None
+                except ValueError:
+                    year = None
+                if year and 1950 <= year <= 2100:
+                    entry[key] = year
+            elif isinstance(value, (str, int, float)) and str(value).strip():
+                entry[key] = str(value).strip()[:200]
+        if entry.get("school") or entry.get("degree"):
+            out.append(entry)
+    return out
+
+
+def describe_degree(d: dict) -> str:
+    """"Bachelor's in ECE, Carnegie Mellon University (2026)"."""
+    what = " in ".join(x for x in (d.get("degree"), d.get("discipline")) if x)
+    where = ", ".join(x for x in (what, d.get("school")) if x)
+    return f"{where} ({d['graduation_year']})" if d.get("graduation_year") else where
 
 
 def load_profile(path: Path | None = None) -> ApplicantProfile:

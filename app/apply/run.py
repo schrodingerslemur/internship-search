@@ -26,6 +26,8 @@ def draft_for(
     title: str | None = None,
     canonical_job_id: str | None = None,
     client: httpx.Client | None = None,
+    overrides: dict | None = None,
+    feedback: str = "",
 ) -> Draft:
     payload, questions = greenhouse.fetch(form, client)
     company = company or payload.get("company_name") or form.token
@@ -37,6 +39,8 @@ def draft_for(
         resume=resume_text(profile),
         posting=f"{payload.get('title', '')}\n{posting}",
         llm=llm,
+        overrides=overrides,
+        feedback=feedback,
     )
     return build_draft(
         key=form.key,

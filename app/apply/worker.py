@@ -43,7 +43,7 @@ from app.config import get_settings
 from app.db import session_scope
 from app.logging_setup import get_logger
 from app.models import ApplicantDocument, ApplicantRecord, ApplyTask, Job, User
-from app.models.autoapply import FAILED, NEEDS_YOU, QUEUED, RUNNING, SUBMITTED, WAITING_CODE
+from app.models.autoapply import FAILED, NEEDS_YOU, QUEUED, REVIEW, RUNNING, SUBMITTED, WAITING_CODE
 from app.models.base import JobStatus, utcnow
 
 log = get_logger("autoapply.worker")
@@ -138,8 +138,17 @@ def _process(task_id: int, answerer, *, dry_run: bool) -> Outcome:
         problems = readiness(record)
         if problems:
             return Outcome(NEEDS_YOU, "Your auto-apply profile is incomplete: " + "; ".join(problems) + ".")
+        user = session.get(User, task.user_id)
+        # Someone who checks applications first gets a draft to approve; once
+        # approved, it is filled exactly as they left it.
+        check_first = bool(user and user.review_applications and not task.approved)
+        overrides, feedback = dict(task.overrides or {}), task.feedback or ""
         if task.by_agent:
-            return _process_agent(session, task, job, record, answerer, dry_run=dry_run)
+            return _process_agent(
+                session, task, job, record, answerer, dry_run=dry_run,
+                check_first=check_first, overrides=overrides, feedback=feedback,
+            )
+        approved = bool(task.approved)
         _, token, job_id = task.form_key.split(":", 2)
         form = greenhouse.GreenhouseJob(token, job_id)
         company, title, canonical = job.company_name, job.title, job.canonical_job_id
@@ -164,8 +173,10 @@ def _process(task_id: int, answerer, *, dry_run: bool) -> Outcome:
             profile.documents[kind] = {"path": str(path), "labels": labels}
         try:
             draft = draft_for(
-                form, profile, llm=answerer, company=company, title=title,
-                canonical_job_id=canonical,
+                form, profile, company=company, title=title, canonical_job_id=canonical,
+                # Approved: nothing new is written; what they saw is what goes.
+                llm=None if approved else answerer,
+                overrides=overrides, feedback=feedback,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
@@ -184,6 +195,8 @@ def _process(task_id: int, answerer, *, dry_run: bool) -> Outcome:
             return Outcome(
                 NEEDS_YOU, f"{len(labels)} required question(s) it would not answer for you."
             )
+        if check_first:
+            return Outcome(REVIEW, "Answers ready for you to check. Nothing has been sent.")
         return _fill_and_submit(draft, profile, dry_run=dry_run, task_id=task_id)
 
 def _launch(p):
@@ -196,7 +209,18 @@ def _launch(p):
 # ------------------------------------------------- any other format: the agent
 
 
-def _process_agent(session, task: ApplyTask, job: Job, record, answerer, *, dry_run: bool) -> Outcome:
+def _process_agent(
+    session,
+    task: ApplyTask,
+    job: Job,
+    record,
+    answerer,
+    *,
+    dry_run: bool,
+    check_first: bool = False,
+    overrides: dict | None = None,
+    feedback: str = "",
+) -> Outcome:
     """A form with no code of its own: the general agent works it out.
 
     Called inside the reading session; everything needed is copied out of it
@@ -246,13 +270,25 @@ def _process_agent(session, task: ApplyTask, job: Job, record, answerer, *, dry_
         except Exception:  # an unreadable PDF still gets uploaded; the model just reads less
             resume = ""
         brief = briefing(profile, resume=resume, company=company, title=title, posting=posting)
+        if overrides:
+            brief += "\n\nThe candidate checked these answers and wants them entered exactly:\n" + "\n".join(
+                f"- {label}: {value}" for label, value in overrides.items()
+            )
+        if feedback.strip():
+            brief += (
+                "\n\nThe candidate read your previous draft for this form and asked for this "
+                "(follow it, but never invent facts):\n" + feedback.strip()[:2000]
+            )
+        # Checking first: fill everything, stop before the final submit.
         result, shot = _run_agent(
-            url, answerer, briefing=brief, files=files, recipe=notes, task_id=task_id, dry_run=dry_run
+            url, answerer, briefing=brief, files=files, recipe=notes, task_id=task_id,
+            dry_run=dry_run or check_first,
         )
 
     if isinstance(result, str):
         return Outcome(NEEDS_YOU, f"The agent hit an error ({result}).", shot)
-    status = {"submitted": SUBMITTED, "ready": QUEUED, "failed": FAILED}.get(result.status, NEEDS_YOU)
+    ready = REVIEW if check_first and not dry_run else QUEUED
+    status = {"submitted": SUBMITTED, "ready": ready, "failed": FAILED}.get(result.status, NEEDS_YOU)
     if not dry_run:
         with session_scope() as s:
             from app.apply.cloud import save_recipe
@@ -265,6 +301,8 @@ def _process_agent(session, task: ApplyTask, job: Job, record, answerer, *, dry_
             {**q, **({"kind": document_kind(q["label"]) or "other"} if q["type"] == "file" else {})}
             for q in result.questions
         ]
+    if status == REVIEW:
+        return Outcome(REVIEW, f"{format_name}: filled in and ready for you to check. Nothing has been sent.", shot)
     say = f"{format_name}: " if status != SUBMITTED else ""
     detail = result.detail if status != SUBMITTED else f"Submitted on {format_name}; the site confirmed it."
     return Outcome(status, (say + detail)[:500], shot)
@@ -487,6 +525,8 @@ def _store_answers(task_id: int, draft: Draft) -> None:
                 "value": (Path(str(a.value)).name if a.type == "file" and a.value else a.value),
                 "source": a.source,
                 "required": a.required,
+                "type": a.type,
+                **({"options": a.options[:100]} if a.options else {}),
             }
             for a in draft.answers
             if a.answered

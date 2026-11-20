@@ -240,30 +240,69 @@ def fill_education(page, profile: ApplicantProfile) -> list[str]:
 
     It is not in the API's questions, but when present its School, Degree and
     Discipline are required: comboboxes over Greenhouse's fixed lists, plus
-    free year fields. Returns the fields it could not set.
+    free year fields. The current degree goes in the first row; each of
+    ``other_education`` gets a row of its own via the block's "Add another"
+    button, where the board has one. Returns the required fields it could not
+    set (only the first row's: the others are optional).
     """
     if _by_id(page, "school--0", "input").count() == 0:
         return []
-    missed = []
-    if profile.school and not _search_and_pick(page, "school--0", profile.school):
-        if not _search_and_pick(page, "school--0", "Other"):
-            missed.append("School")
-    if profile.degree:
-        word = norm(profile.degree).split("'")[0].split()[0]
-        if not choose(page, "degree--0", None, pattern=re.compile(rf"^{re.escape(word)}")):
-            missed.append("Degree")
-    if profile.discipline and _by_id(page, "discipline--0", "input").count():
-        pick = _discipline_option(_menu_texts(page, "discipline--0"), profile.discipline)
-        if not (pick and choose(page, "discipline--0", pick)):
-            missed.append("Discipline")
-    end_year = _by_id(page, "end-year--0", "input")
-    if profile.graduation_year and end_year.count():
-        end_year.fill(str(profile.graduation_year))
-    start_year = _by_id(page, "start-year--0", "input")
-    first = profile.education_start_year or (profile.graduation_year and profile.graduation_year - 4)
-    if first and start_year.count():
-        start_year.fill(str(first))
+    first_year = profile.education_start_year or (profile.graduation_year and profile.graduation_year - 4)
+    missed = _fill_degree(
+        page, 0, school=profile.school, degree=profile.degree, discipline=profile.discipline,
+        end_year=profile.graduation_year, start_year=first_year,
+    )
+    for i, other in enumerate(profile.other_education or [], start=1):
+        try:
+            if _by_id(page, f"school--{i}", "input").count() == 0 and not _add_education_row(page, i):
+                break
+            end = other.get("graduation_year")
+            _fill_degree(
+                page, i, school=other.get("school", ""), degree=other.get("degree", ""),
+                discipline=other.get("discipline", ""), end_year=end, start_year=end and end - 4,
+            )
+        except Exception:  # an extra degree is a nicety; never fail the form over it
+            break
     return missed
+
+
+def _fill_degree(page, i: int, *, school: str, degree: str, discipline: str, end_year, start_year) -> list[str]:
+    missed = []
+    if school and not _search_and_pick(page, f"school--{i}", school):
+        if not _search_and_pick(page, f"school--{i}", "Other"):
+            missed.append("School")
+    if degree:
+        word = norm(degree).split("'")[0].split()[0]
+        if not choose(page, f"degree--{i}", None, pattern=re.compile(rf"^{re.escape(word)}")):
+            missed.append("Degree")
+    if discipline and _by_id(page, f"discipline--{i}", "input").count():
+        pick = _discipline_option(_menu_texts(page, f"discipline--{i}"), discipline)
+        if not (pick and choose(page, f"discipline--{i}", pick)):
+            missed.append("Discipline")
+    end = _by_id(page, f"end-year--{i}", "input")
+    if end_year and end.count():
+        end.fill(str(end_year))
+    start = _by_id(page, f"start-year--{i}", "input")
+    if start_year and start.count():
+        start.fill(str(start_year))
+    return missed
+
+
+def _add_education_row(page, i: int) -> bool:
+    """Press the Education block's "Add another" and wait for row ``i``."""
+    # The nearest block around the first school field that holds such a
+    # button. If that block holds more than one (Education and Employment
+    # side by side), which is which can't be told, so nothing is pressed.
+    add = "contains(translate(normalize-space(.), 'ADNOTHER', 'adnother'), 'add another')"
+    block = page.locator(f'xpath=//*[@id="school--0"]/ancestor::*[.//button[{add}]][1]')
+    if block.count() == 0:
+        return False
+    buttons = block.first.locator(f"xpath=.//button[{add}]")
+    if buttons.count() != 1:
+        return False
+    buttons.first.click()
+    _settle(page, 800)
+    return _by_id(page, f"school--{i}", "input").count() > 0
 
 
 def _decline_remaining_demographics(page) -> list[str]:

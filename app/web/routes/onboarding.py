@@ -54,6 +54,8 @@ SECTIONS = [
         ("graduation_year", "Graduation year", ""),
         ("gpa", "GPA", ""),
         ("coursework", "Coursework", ""),
+        ("other_education", "Other degrees",
+         "Any degree besides the one above, like a bachelor's you finished before this master's."),
     ]),
     ("What you've done", [
         ("skills", "Skills", ""),

@@ -50,6 +50,9 @@ class User(Base, TimestampMixin):
     #: Where this user's digests go. Falls back to ``email`` when unset.
     digest_email: Mapped[str | None] = mapped_column(String(320))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
+    #: Check every application before it is sent: the agent fills the form,
+    #: then waits for the user to approve, edit, or send it back with feedback.
+    review_applications: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     #: When the account proved it owns ``email`` by clicking the link sent
     #: there. Null: it cannot sign in yet (see app/services/email_verify.py).
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime)

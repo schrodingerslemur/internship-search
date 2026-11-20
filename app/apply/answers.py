@@ -341,7 +341,16 @@ def prepare_answers(
     resume: str = "",
     posting: str = "",
     llm: Any = None,
+    overrides: dict[str, Any] | None = None,
+    feedback: str = "",
 ) -> list[Answer]:
+    """Answer every question: identity, files, standing answers, rules, then the model.
+
+    ``overrides`` are the user's own answers from checking an earlier draft,
+    by label; they beat everything. ``feedback`` is what they asked the model
+    to do differently, passed along with the facts.
+    """
+    overrides = {norm(k): v for k, v in (overrides or {}).items()}
     answers: list[Answer] = []
     for q in questions:
         a = Answer(
@@ -353,6 +362,15 @@ def prepare_answers(
             option_values={o.label: o.value for o in q.options},
         )
         answers.append(a)
+
+        if q.type != "file" and norm(q.label) in overrides:
+            mine = overrides[norm(q.label)]
+            if isinstance(mine, list):
+                mine = ", ".join(str(x) for x in mine)
+            value = _text_or_option(q, str(mine or "").strip()) if str(mine or "").strip() else None
+            if value not in (None, "", []):
+                a.value, a.source = value, "you"
+                continue
 
         if q.name in FIELD_IDENTITY:
             a.value, a.source = FIELD_IDENTITY[q.name](profile) or None, "profile"
@@ -388,7 +406,7 @@ def prepare_answers(
         and (a.required or (a.type in ("text", "textarea") and WORTH_WRITING.search(a.label)))
     ]
     if pending and llm is not None:
-        _ask_model(pending, profile, company, resume, posting, llm)
+        _ask_model(pending, profile, company, resume, posting, llm, feedback=feedback)
     return answers
 
 
@@ -399,9 +417,17 @@ def _ask_model(
     resume: str,
     posting: str,
     llm: Any,
+    *,
+    feedback: str = "",
 ) -> None:
+    facts = profile.facts_text()
+    if feedback.strip():
+        facts += (
+            "\n\nThe candidate read an earlier draft of these answers and asked for this "
+            "(follow it, but never invent facts):\n" + feedback.strip()[:2000]
+        )
     replies = llm.answer_application_questions(
-        facts=profile.facts_text(),
+        facts=facts,
         resume=resume,
         posting=f"{company}\n{posting}",
         questions=[

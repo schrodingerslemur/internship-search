@@ -90,6 +90,18 @@
           <option value="yes" {% if value == true %}selected{% endif %}>Yes</option>
           <option value="no" {% if value == false %}selected{% endif %}>No</option>
         </select>
+        {% elif kind == "education" %}
+        <div class="edu-rows" data-edu>
+          {% for d in (value or []) + [{}] %}
+          <div class="edu-row">
+            <input name="edu_degree_{{ loop.index }}" value="{{ d.degree or '' }}" placeholder="Degree, e.g. Bachelor's" aria-label="Degree">
+            <input name="edu_major_{{ loop.index }}" value="{{ d.major or '' }}" placeholder="Major" aria-label="Major">
+            <input name="edu_school_{{ loop.index }}" value="{{ d.school or '' }}" placeholder="School" aria-label="School">
+            <input name="edu_graduation_year_{{ loop.index }}" value="{{ d.graduation_year or '' }}" placeholder="Year" aria-label="Graduation year" inputmode="numeric">
+          </div>
+          {% endfor %}
+        </div>
+        <button class="btn sm" type="button" data-edu-add>Add another degree</button>
         {% elif kind == "list" %}
         <textarea id="f-{{ name }}" name="{{ name }}" rows="{{ [3, (value or [])|length + 1]|max if value else 2 }}">{{ (value or []) | join("\n") }}</textarea>
         {% else %}
@@ -115,6 +127,9 @@
 .chat-form{display:flex;gap:8px;margin-top:10px;align-items:flex-end}
 .chat-form textarea{flex:1}
 .review h2{font-size:15px;margin:18px 0 8px}
+.edu-rows{display:grid;gap:6px;margin-bottom:6px}
+.edu-row{display:grid;grid-template-columns:1fr 1fr 1.4fr 70px;gap:6px}
+@media (max-width:640px){.edu-row{grid-template-columns:1fr 1fr}.edu-row input{font-size:16px}}
 </style>
 <script>
 (function () {
@@ -123,6 +138,18 @@
       var b = form.querySelector('button[type="submit"]');
       if (b) { b.disabled = true; b.textContent = "Thinking…"; }
     });
+  });
+  var add = document.querySelector("[data-edu-add]");
+  if (add) add.addEventListener("click", function () {
+    var rows = document.querySelector("[data-edu]");
+    var last = rows.lastElementChild, n = rows.children.length + 1;
+    var row = last.cloneNode(true);
+    row.querySelectorAll("input").forEach(function (input) {
+      input.value = "";
+      input.name = input.name.replace(/_\d+$/, "_" + n);
+    });
+    rows.appendChild(row);
+    row.querySelector("input").focus();
   });
   var chat = document.querySelector(".chat");
   if (chat) chat.scrollTop = chat.scrollHeight;
