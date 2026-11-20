@@ -589,6 +589,7 @@ ul.clean li{padding:3px 0;font-size:13px}
         <a href="/settings">What you're looking for</a>
         <a href="/model">Your AI model</a>
         <a href="/notifications">Emails and schedule</a>
+        {% if current_user.own %}<a href="/admin">Admin</a>{% endif %}
         <form method="post" action="/logout"><button type="submit">Sign out</button></form>
       </div>
     </details>

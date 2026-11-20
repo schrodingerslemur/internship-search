@@ -119,6 +119,15 @@ def _unpad(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
+def _is_owner(user: User) -> bool:
+    from sqlalchemy.orm import object_session
+
+    from app.services.user_llm import owner_id
+
+    session = object_session(user)
+    return bool(session is not None and owner_id(session) == user.id)
+
+
 def issue_session(user: User, key: bytes, *, now: float | None = None) -> str:
     """Mint a signed cookie.
 
@@ -132,6 +141,8 @@ def issue_session(user: User, key: bytes, *, now: float | None = None) -> str:
             "uid": user.id,
             "email": user.email,
             "name": user.name,
+            # Only shows the Admin link; /admin checks ownership itself.
+            "own": _is_owner(user),
             "iat": int(now or time.time()),
         },
         separators=(",", ":"),

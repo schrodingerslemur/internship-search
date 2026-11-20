@@ -72,6 +72,19 @@ class User(Base, TimestampMixin):
         return self.digest_email or self.email
 
 
+class AllowedEmail(Base, TimestampMixin):
+    """One address (or "@domain") the owner has allowed to sign up, from /admin.
+
+    Joins SIGNUP_ALLOWED_EMAILS: either list having anything in it makes
+    signup allowlist-only (app/services/email_verify.py).
+    """
+
+    __tablename__ = "allowed_emails"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entry: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+
+
 class UserJobState(Base, TimestampMixin):
     """One user's relationship to one shared job.
 

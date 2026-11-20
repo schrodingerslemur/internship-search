@@ -196,7 +196,7 @@ async def signup(
     # Everyone but the first account (the owner) is a newcomer, and only
     # newcomers are checked against the allowlist and asked to verify.
     newcomer = auth.account_count(db) > 0 and auth.claimable_legacy_account(db) is None
-    if newcomer and not email_verify.email_allowed(email_clean):
+    if newcomer and not email_verify.email_allowed(email_clean, db):
         return fail(
             "This email isn't on the invite list. Ask whoever sent you the link to add it.",
             status=403,

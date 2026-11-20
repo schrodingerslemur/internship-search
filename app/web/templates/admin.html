@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Admin · Internship Search{% endblock %}
+{% block content %}
+{# Owner only (app/web/routes/admin.py). Who has an account, and who may make one. #}
+<style>
+.adm{max-width:900px}
+.adm h2{font-size:15px;margin:26px 0 10px}
+.adm td,.adm th{padding:8px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.adm th{font-size:12px;color:var(--muted);font-weight:600}
+.adm .who .em{font-weight:600}
+.adm .dim{color:var(--dim);font-size:12.5px}
+.adm .ok{color:var(--ok)} .adm .bad{color:var(--bad)} .adm .warn{color:var(--warn)}
+.adm .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.adm .acts form{margin:0;display:flex;gap:6px}
+.adm .acts input{width:170px;font-size:12.5px;padding:4px 6px}
+.adm .chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+.adm .chip{display:inline-flex;gap:6px;align-items:center;background:var(--panel);border:1px solid var(--line);
+  border-radius:999px;padding:3px 4px 3px 10px;font-size:13px}
+.adm .chip button{border:0;background:none;color:var(--muted);cursor:pointer;font-size:14px;padding:0 6px}
+.adm .chip.fixed{padding-right:10px}
+.adm .add{display:flex;gap:8px;flex-wrap:wrap}
+.adm .add textarea{flex:1 1 280px;min-height:40px;font-size:16px}
+</style>
+
+<div class="adm">
+<h1>Admin</h1>
+<div class="sub">Only you can see this page. Accounts here, and who's allowed to make one.</div>
+{% if flash %}<div class="flash {{ 'bad' if flash.bad else 'ok' }}">{{ flash.text }}</div>{% endif %}
+
+<h2>Who can sign up</h2>
+{% set listed = allowed|length + env_allowed|length %}
+<div class="panel">
+  <p class="sub" style="margin:0 0 10px">
+    {% if listed %}Only these emails can create an account. An entry like <span class="mono">@andrew.cmu.edu</span> allows a whole domain.
+    {% else %}<strong class="warn">Anyone with the link can sign up{% if invite_code_set %} if they have the invite code{% endif %}.</strong>
+      Add an email below and signup becomes invite-only to the list.{% endif %}
+  </p>
+  {% if listed %}
+  <div class="chips">
+    {% for a in allowed %}
+    <span class="chip">{{ a.entry }}
+      <form method="post" action="/admin/allow/{{ a.id }}/remove" style="margin:0">
+        <button type="submit" title="Remove {{ a.entry }}" aria-label="Remove {{ a.entry }}">×</button></form></span>
+    {% endfor %}
+    {% for e in env_allowed %}<span class="chip fixed" title="Set in SIGNUP_ALLOWED_EMAILS on Render">{{ e }} · Render</span>{% endfor %}
+  </div>
+  {% endif %}
+  <form class="add" method="post" action="/admin/allow">
+    <textarea name="entries" rows="1" placeholder="friend@gmail.com, @andrew.cmu.edu" aria-label="Emails to allow"></textarea>
+    <button class="btn primary" type="submit">Allow</button>
+  </form>
+  <p class="dim" style="margin:10px 0 0">
+    New accounts confirm their email by link:
+    {% if not verify_on %}<span class="warn">off</span>.
+    {% elif smtp_ok %}<span class="ok">on</span>.
+    {% else %}<span class="bad">on, but email isn't set up on Render (SMTP_HOST, SMTP_USER, SMTP_PASSWORD), so new signups are refused.</span>{% endif %}
+  </p>
+</div>
+
+<h2>Accounts ({{ users|length }})</h2>
+<table>
+  <thead><tr><th>Account</th><th>Joined</th><th>Last sign-in</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {% for u in users %}
+  <tr>
+    <td class="who"><div class="em">{{ u.email or '(no email)' }}</div>
+      <div class="dim">{{ u.name or '' }}{% if u.id == owner_id %} · you, the owner{% endif %}
+        · {{ submitted.get(u.id, 0) }} applied by the agent
+        · {{ 'own model' if u.id in with_model else 'no model' }}</div></td>
+    <td class="dim">{{ u.created_at|timeago }}</td>
+    <td class="dim">{{ u.last_login_at|timeago if u.last_login_at else 'never' }}</td>
+    <td>
+      {% if not u.is_active %}<span class="bad">Turned off</span>
+      {% elif not u.password_hash %}<span class="dim">Never set up</span>
+      {% elif not u.email_verified_at %}<span class="warn">Email not confirmed</span>
+      {% else %}<span class="ok">Active</span>{% endif %}
+    </td>
+    <td>
+      {% if u.id != owner_id %}
+      <div class="acts">
+        <form method="post" action="/admin/users/{{ u.id }}/active">
+          <input type="hidden" name="active" value="{{ '0' if u.is_active else '1' }}">
+          <button class="btn sm" type="submit">{{ 'Turn off' if u.is_active else 'Turn on' }}</button>
+        </form>
+        <details><summary class="btn sm">Delete…</summary>
+          <form method="post" action="/admin/users/{{ u.id }}/delete" style="margin-top:6px">
+            <input name="confirm" placeholder="Type {{ u.email }}" aria-label="Type the email to confirm" autocomplete="off">
+            <button class="btn sm" type="submit">Delete for good</button>
+          </form>
+        </details>
+      </div>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="dim">Turning an account off locks it out and cancels its waiting applications; turn it on again any time. Deleting removes
+  the account and everything it saved, and can't be undone.</p>
+</div>
+{% endblock %}

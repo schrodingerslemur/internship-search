@@ -31,6 +31,7 @@ from app.models.tracking import (
     SearchRunSource,
 )
 from app.models.user import (
+    AllowedEmail,
     AppConfig,
     CandidateProfile,
     OnboardingState,
@@ -42,6 +43,7 @@ from app.models.user import (
 )
 
 __all__ = [
+    "AllowedEmail",
     "KANBAN_ORDER",
     "SOURCE_KIND_RANK",
     "TERMINAL_STATUSES",

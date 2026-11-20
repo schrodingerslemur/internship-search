@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import time
 
 from sqlalchemy.orm import Session
@@ -32,18 +33,30 @@ VERIFY_MAX_AGE = 3 * 24 * 60 * 60
 # --------------------------------------------------------------------------
 
 
-def allowed_entries() -> list[str]:
-    raw = get_settings().signup_allowed_emails or ""
-    return [e.strip().lower() for e in raw.split(",") if e.strip()]
+def parse_entries(raw: str) -> list[str]:
+    """Addresses or "@domain" entries from text split by commas, spaces or lines."""
+    return [e.strip().lower() for e in re.split(r"[,\s]+", raw or "") if e.strip()]
 
 
-def email_allowed(email: str) -> bool:
+def allowed_entries(session: Session | None = None) -> list[str]:
+    """SIGNUP_ALLOWED_EMAILS plus whatever the owner added on /admin."""
+    entries = parse_entries(get_settings().signup_allowed_emails or "")
+    if session is not None:
+        from sqlalchemy import select
+
+        from app.models import AllowedEmail
+
+        entries += [e for e in session.scalars(select(AllowedEmail.entry)).all() if e not in entries]
+    return entries
+
+
+def email_allowed(email: str, session: Session | None = None) -> bool:
     """Whether ``email`` (already normalised) may create an account.
 
     No list set: everyone. The owner's address is always allowed, so a typo in
     the list can never lock the owner out of re-creating their own account.
     """
-    entries = allowed_entries()
+    entries = allowed_entries(session)
     if not entries:
         return True
     owner = (get_settings().owner_email or "").strip().lower()
