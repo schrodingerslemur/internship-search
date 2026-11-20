@@ -38,7 +38,10 @@ details.prof{margin-top:28px}
 .need.check .src{color:var(--dim);font-size:11.5px;font-weight:400;margin-left:4px}
 .need.check .fixed{font-size:13px;color:var(--muted);margin:4px 0}
 .warnline{font-size:12px;color:var(--bad);font-weight:600}
-details.fb{margin-top:8px} details.fb summary{cursor:pointer;font-size:13px;color:var(--accent)}
+details.fb{margin-top:8px}
+details.fillhelp{margin:10px 0 4px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+details.fillhelp summary{cursor:pointer;font-weight:600;font-size:14px}
+details.fillhelp ol{margin:8px 0 6px 18px;padding:0;font-size:13.5px;line-height:1.7} details.fb summary{cursor:pointer;font-size:13px;color:var(--accent)}
 details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
 .prof textarea{width:100%;min-height:300px;margin-top:10px;font:12.5px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;
  background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px}
@@ -60,6 +63,19 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
 
   {% with back = "/autoapply" %}{% include "partials/send_mode.html" %}{% endwith %}
 
+  {% if fill_codes %}
+  <details class="fillhelp" id="fill-help">
+    <summary>Stuck on a CAPTCHA? Fill it yourself in seconds</summary>
+    <ol>
+      <li>Once: drag this button to your bookmarks bar (or right-click it and bookmark it):
+        <a class="btn sm" href="{{ fill_bookmarklet }}" onclick="return false" draggable="true">Fill application</a></li>
+      <li>On an application below, press <b>Fill it myself</b>. The form opens in a new tab.</li>
+      <li>On that tab, click <b>Fill application</b> in your bookmarks bar. It fills what it can and lists the rest.</li>
+      <li>Check it, upload any files, solve the CAPTCHA and press Submit yourself. Then come back and press <b>I applied</b>.</li>
+    </ol>
+    <p class="hint">It runs only in your own browser and never submits. The answers travel in the link's # part, which browsers don't send to any server, and it clears them from the address bar right away.</p>
+  </details>
+  {% endif %}
   {% if checks %}
   <h2>Ready for you to check ({{ checks|length }})</h2>
   {% for t in checks %}
@@ -102,6 +118,8 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
       </form>
     </details>
     <div class="acts">
+      {% if fill_codes.get(t.id) and t.form_url %}<button class="btn sm" type="button" data-fill="{{ fill_codes[t.id] }}" data-url="{{ t.form_url }}"
+        title="Opens the form in a new tab and copies the answers; your Fill application bookmark fills it in">Fill it myself</button>{% endif %}
       <a class="btn sm" href="{{ t.form_url }}" target="_blank" rel="noopener">Open the form</a>
       <form method="post" action="/autoapply/task/{{ t.id }}/done"><button class="btn sm" type="submit">I applied myself</button></form>
     </div>
@@ -171,6 +189,8 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
     </form>
     {% endif %}
     <div class="acts">
+      {% if fill_codes.get(t.id) and t.form_url %}<button class="btn sm" type="button" data-fill="{{ fill_codes[t.id] }}" data-url="{{ t.form_url }}"
+        title="Opens the form in a new tab and copies the answers; your Fill application bookmark fills it in">Fill it myself</button>{% endif %}
       <a class="btn sm primary" href="{{ t.form_url }}" target="_blank" rel="noopener">Open the form</a>
       <form method="post" action="/autoapply/task/{{ t.id }}/done"><button class="btn sm" type="submit">I applied</button></form>
       <form method="post" action="/autoapply/task/{{ t.id }}/retry"><button class="btn sm" type="submit">Retry</button></form>
@@ -258,6 +278,19 @@ details.prof > summary{cursor:pointer;font-weight:600;font-size:15px}
     </form>
   </details>
 </div>
+<script>
+// Fill it myself: copy the answers (in case the site drops the link's # part)
+// and open the form with them in the fragment for the bookmarklet.
+document.querySelectorAll("[data-fill]").forEach((b) => b.addEventListener("click", () => {
+  const code = b.dataset.fill, url = b.dataset.url;
+  try { navigator.clipboard.writeText(code); } catch (e) {}
+  window.open(url + (url.includes("#") ? "&" : "#") + "isfill=" + code, "_blank", "noopener");
+  const help = document.getElementById("fill-help");
+  try {
+    if (help && !localStorage.getItem("fillSeen")) { help.open = true; localStorage.setItem("fillSeen", "1"); }
+  } catch (e) { if (help) help.open = true; }
+}));
+</script>
 <script>
 // While the agent is working, refresh when its state changes (a code request
 // appears, an application finishes) -- but never under someone typing.

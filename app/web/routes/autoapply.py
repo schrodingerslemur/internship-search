@@ -8,6 +8,7 @@ happens after the response is sent.
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Request, UploadFile
@@ -123,6 +124,19 @@ def swipe_decide(
     return JSONResponse({"ok": True})
 
 
+@lru_cache(maxsize=1)
+def fill_bookmarklet() -> str:
+    """app/web/static/fill.js as a javascript: link to save as a bookmark.
+
+    The whole script lives in the bookmark, not loaded from this site: job
+    sites' content security policies would block a script from elsewhere.
+    """
+    from app.config import PROJECT_ROOT
+
+    source = (PROJECT_ROOT / "app" / "web" / "static" / "fill.js").read_text(encoding="utf-8")
+    return "javascript:" + quote(source.strip(), safe="")
+
+
 def _nav_counts(db: Session, user: User) -> dict:
     from app.services import jobs_query as q
 
@@ -132,13 +146,20 @@ def _nav_counts(db: Session, user: User) -> dict:
 @router.get("/autoapply", response_class=HTMLResponse)
 def autoapply_page(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)):
     record = cloud.get_record(db, user)
+    tasks = cloud.tasks_for(db, user)
+    # Only where it's useful: applications handed back or waiting to be checked.
+    fill_codes = {
+        t.id: cloud.fill_code(t, record) for t in tasks if t.status in (cloud.NEEDS_YOU, cloud.REVIEW)
+    }
     counts = cloud.queue_counts(db, user)
     flash = request.query_params.get("done")
     return templates.TemplateResponse(
         request,
         "autoapply.html",
         {
-            "tasks": cloud.tasks_for(db, user),
+            "tasks": tasks,
+            "fill_codes": fill_codes,
+            "fill_bookmarklet": fill_bookmarklet() if fill_codes else "",
             "counts": _nav_counts(db, user),
             "review_mode": bool(user.review_applications),
             "labels": cloud.STATUS_LABELS,

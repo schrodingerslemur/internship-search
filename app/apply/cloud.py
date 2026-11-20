@@ -7,6 +7,7 @@ fills the Greenhouse form and submits it, or hands it back with a reason.
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from dataclasses import asdict, fields
@@ -362,6 +363,37 @@ def redraft(session: Session, user: User, task: ApplyTask, feedback: str) -> App
         queued.feedback = feedback.strip()[:2000]
         session.flush()
     return queued
+
+
+#: Contact fields the fill-it-myself bookmarklet recognises by field name.
+FILL_PROFILE_KEYS = ("first_name", "last_name", "email", "phone", "linkedin", "github", "website", "location")
+
+
+def fill_code(task: ApplyTask, record: ApplicantRecord | None) -> str:
+    """Everything the user's own browser needs to fill this form: a base64url
+    JSON of the drafted answers, contact details, and what is still theirs.
+
+    It travels in the form URL's fragment, which browsers never send to a
+    server (app/web/static/fill.js reads it, then removes it).
+    """
+    data = (record.data or {}) if record is not None else {}
+    answers = [
+        {"label": a.get("label", ""), "value": a.get("value")}
+        for a in task.answers or []
+        if a.get("type") != "file" and a.get("value") not in (None, "", [])
+    ]
+    ask = [
+        (q.get("label") if isinstance(q, dict) else str(q))
+        for q in task.left_for_you or []
+        if not (isinstance(q, dict) and q.get("type") == "file")
+    ]
+    payload = {
+        "answers": answers,
+        "profile": {k: data.get(k) for k in FILL_PROFILE_KEYS if data.get(k)},
+        "ask": [a for a in ask if a],
+    }
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
 def cancel(session: Session, user: User, job: Job) -> bool:
